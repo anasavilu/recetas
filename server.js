@@ -341,6 +341,82 @@ function datosYoutube(html) {
   return { titulo: t ? decodificarEntidades(t[1]) : '', descripcion, leido: !!d };
 }
 
+// ---- subtítulos de YouTube (intento: puede fallar si YouTube bloquea al servidor) ----
+function urlYoutubeValida(s) {
+  try {
+    const u = new URL(s);
+    return u.protocol === 'https:' && /(^|\.)youtube\.com$/.test(u.hostname);
+  } catch (e) { return false; }
+}
+
+function extraerJsonArray(html, clave) {
+  const i = html.indexOf('"' + clave + '":[');
+  if (i === -1) return null;
+  const ini = html.indexOf('[', i);
+  let prof = 0, enStr = false, esc = false;
+  for (let k = ini; k < html.length; k++) {
+    const c = html[k];
+    if (enStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') enStr = false; continue; }
+    if (c === '"') enStr = true;
+    else if (c === '[') prof++;
+    else if (c === ']') {
+      prof--;
+      if (prof === 0) { try { return JSON.parse(html.slice(ini, k + 1)); } catch (e) { return null; } }
+    }
+  }
+  return null;
+}
+
+function elegirPista(pistas) {
+  const validas = (Array.isArray(pistas) ? pistas : []).filter(p => p && urlYoutubeValida(p.baseUrl));
+  const es = validas.filter(p => /^es/i.test(p.languageCode || ''));
+  const manual = l => l.find(p => p.kind !== 'asr');
+  return manual(es) || es[0] || manual(validas) || validas[0] || null;
+}
+
+async function textoDePista(pista) {
+  const u = new URL(pista.baseUrl);
+  u.searchParams.set('fmt', 'json3');
+  const r = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(15000), headers: { 'User-Agent': UA, 'Accept-Language': 'es-ES,es;q=0.9' } });
+  if (!r.ok) return '';
+  const cuerpo = await r.text();
+  if (!cuerpo.trim()) return '';
+  let texto;
+  try {
+    const j = JSON.parse(cuerpo);
+    texto = (j.events || []).map(ev => (ev.segs || []).map(s => s.utf8 || '').join('')).join(' ');
+  } catch (e) {
+    texto = [...cuerpo.matchAll(/<text[^>]*>([\s\S]*?)<\/text>/g)]
+      .map(m => decodificarEntidades(decodificarEntidades(m[1])).replace(/<[^>]+>/g, '')).join(' ');
+  }
+  return texto.replace(/\s+/g, ' ').trim();
+}
+
+async function subtitulosYoutube(videoId, html) {
+  const vias = [
+    async () => extraerJsonArray(html || '', 'captionTracks'),
+    async () => {
+      const r = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+        method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(15000),
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip' },
+        body: JSON.stringify({ context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 34, hl: 'es' } }, videoId }),
+      });
+      if (!r.ok) return null;
+      const d = await r.json();
+      return (((d || {}).captions || {}).playerCaptionsTracklistRenderer || {}).captionTracks || null;
+    },
+  ];
+  for (const via of vias) {
+    try {
+      const pista = elegirPista(await via());
+      if (!pista) continue;
+      const texto = await textoDePista(pista);
+      if (texto.length >= 100) return texto.slice(0, 25000);
+    } catch (e) { /* probamos la siguiente vía */ }
+  }
+  return '';
+}
+
 app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
   try {
     const url = String((req.body || {}).url || '').trim();
@@ -352,16 +428,27 @@ app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
     const extra = {};
     const videoId = idYoutube(u);
     if (videoId) {
-      const { html } = await descargar('https://www.youtube.com/watch?v=' + encodeURIComponent(videoId));
+      let html = '';
+      try { html = (await descargar('https://www.youtube.com/watch?v=' + encodeURIComponent(videoId))).html; } catch (e) { /* se intenta igualmente por la otra vía */ }
       const y = datosYoutube(html);
-      if (!y.leido) {
-        return res.status(422).json({ error: 'YouTube no ha dejado leer ese vídeo desde el servidor. Pega la transcripción o la descripción en el cuadro de abajo.' });
-      }
-      if (y.descripcion.trim().length < 150) {
-        const vista = y.descripcion.replace(/\s+/g, ' ').trim().slice(0, 80);
-        return res.status(422).json({ error: 'La descripción del vídeo es muy corta y no incluye la receta' + (vista ? ' (dice: «' + vista + '»)' : ' (está vacía)') + '. Pega la transcripción en el cuadro de abajo.' });
+      const desc = y.descripcion.trim();
+      const descSirve = desc.length >= 150 && /ingredient/i.test(desc);
+
+      let subs = '';
+      if (!descSirve) subs = await subtitulosYoutube(videoId, html);
+
+      if (!descSirve && !subs) {
+        if (!y.leido) {
+          return res.status(422).json({ error: 'YouTube no ha dejado leer ese vídeo desde el servidor (ni la descripción ni los subtítulos). Pega la transcripción o la descripción en el cuadro de abajo.' });
+        }
+        if (desc.length < 150) {
+          const vista = desc.replace(/\s+/g, ' ').slice(0, 80);
+          return res.status(422).json({ error: 'La descripción del vídeo es muy corta' + (vista ? ' (dice: «' + vista + '»)' : ' (está vacía)') + ' y no he podido leer sus subtítulos. Pega la transcripción en el cuadro de abajo.' });
+        }
+        // descripción larga sin receta y sin subtítulos: se intenta con lo que hay
       }
       texto = 'Título del vídeo: ' + y.titulo + '\n\nDescripción del vídeo:\n' + y.descripcion;
+      if (subs) texto += '\n\nSubtítulos del vídeo (transcripción automática de lo que se dice):\n' + subs;
       extra.video_id = videoId;
     } else {
       const { html, url: final } = await descargar(url);

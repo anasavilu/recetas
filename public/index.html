@@ -576,7 +576,7 @@ function renderForm(){
     const impBtn = el('button','aibtn','Leer receta desde el enlace');
     impBtn.onclick = ()=> importar(f);
     box.appendChild(impBtn);
-    box.appendChild(el('div','hint','Lee el título y la descripción del vídeo. Funciona si la receta está escrita en la descripción; si no, pega la transcripción aquí abajo.'));
+    box.appendChild(el('div','hint','Lee la descripción del vídeo y, si no trae la receta, intenta leer sus subtítulos (funciona en Shorts y vídeos con subtítulos automáticos). Si YouTube no lo permite, pega la transcripción aquí abajo.'));
 
     const field2 = el('div','field'); field2.appendChild(el('label',null,'Transcripción o descripción del vídeo (opcional)'));
     const ta = el('textarea'); ta.placeholder='Pega aquí la transcripción o la descripción del vídeo'; ta.value=f.rawText;
