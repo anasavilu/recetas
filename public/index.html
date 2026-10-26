@@ -530,6 +530,18 @@ async function clasificar(f){
   render();
 }
 
+async function importar(f){
+  if(!f.sourceUrl.trim()){ state.aiStatus = 'Pega un enlace primero.'; render(); return; }
+  state.aiStatus = 'Leyendo el enlace… (puede tardar unos segundos)'; render();
+  try{
+    const p = await api('/api/importar-url', { method:'POST', body: JSON.stringify({ url: f.sourceUrl.trim() }) });
+    applyParsed(f, p);
+    if(p.source_url) f.sourceUrl = p.source_url;
+    state.aiStatus = 'Listo. Revisa y ajusta antes de guardar.';
+  }catch(e){ state.aiStatus = 'No se pudo leer el enlace: ' + e.message; }
+  render();
+}
+
 function renderForm(){
   const box = el('div');
   const f = state.form;
@@ -561,12 +573,17 @@ function renderForm(){
     inp.oninput = (e)=>{ f.sourceUrl = e.target.value; f.videoId = extractYoutubeId(e.target.value); };
     field.appendChild(inp); box.appendChild(field);
 
-    const field2 = el('div','field'); field2.appendChild(el('label',null,'Transcripción o descripción del vídeo'));
+    const impBtn = el('button','aibtn','Leer receta desde el enlace');
+    impBtn.onclick = ()=> importar(f);
+    box.appendChild(impBtn);
+    box.appendChild(el('div','hint','Lee el título y la descripción del vídeo. Funciona si la receta está escrita en la descripción; si no, pega la transcripción aquí abajo.'));
+
+    const field2 = el('div','field'); field2.appendChild(el('label',null,'Transcripción o descripción del vídeo (opcional)'));
     const ta = el('textarea'); ta.placeholder='Pega aquí la transcripción o la descripción del vídeo'; ta.value=f.rawText;
     ta.oninput = (e)=>{ f.rawText = e.target.value; };
     field2.appendChild(ta); box.appendChild(field2);
 
-    const aiBtn = el('button','aibtn','Estructurar con IA');
+    const aiBtn = el('button','aibtn','Estructurar texto con IA');
     aiBtn.onclick = ()=>{
       if(!f.rawText.trim()){ state.aiStatus='Pega texto primero.'; render(); return; }
       analizar(f, { text: f.rawText }, 'No se pudo procesar: ');
@@ -575,17 +592,23 @@ function renderForm(){
   }
 
   if(f.origen === 'link'){
-    const field = el('div','field'); field.appendChild(el('label',null,'Enlace (opcional)'));
+    const field = el('div','field'); field.appendChild(el('label',null,'Enlace de la receta'));
     const inp = el('input'); inp.type='url'; inp.placeholder='https://…'; inp.value=f.sourceUrl;
     inp.oninput = (e)=>{ f.sourceUrl = e.target.value; };
+    inp.onkeydown = (e)=>{ if(e.key==='Enter'){ e.preventDefault(); importar(f); } };
     field.appendChild(inp); box.appendChild(field);
 
-    const field2 = el('div','field'); field2.appendChild(el('label',null,'Texto de la receta'));
+    const impBtn = el('button','aibtn','Leer receta desde el enlace');
+    impBtn.onclick = ()=> importar(f);
+    box.appendChild(impBtn);
+    box.appendChild(el('div','hint','Si la web no se deja leer (algunas bloquean lecturas automáticas), pega el texto de la receta aquí abajo.'));
+
+    const field2 = el('div','field'); field2.appendChild(el('label',null,'Texto de la receta (opcional)'));
     const ta = el('textarea'); ta.placeholder='Pega aquí el texto de la receta'; ta.value=f.rawText;
     ta.oninput = (e)=>{ f.rawText = e.target.value; };
     field2.appendChild(ta); box.appendChild(field2);
 
-    const aiBtn = el('button','aibtn','Estructurar con IA');
+    const aiBtn = el('button','aibtn','Estructurar texto con IA');
     aiBtn.onclick = ()=>{
       if(!f.rawText.trim()){ state.aiStatus='Pega texto primero.'; render(); return; }
       analizar(f, { text: f.rawText }, 'No se pudo procesar: ');

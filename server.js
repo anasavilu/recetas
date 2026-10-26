@@ -2,6 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const dns = require('dns').promises;
+const net = require('net');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
@@ -204,6 +206,174 @@ app.post('/api/analyze', requireAuth, requirePerfil, async (req, res) => {
     const parsed = await preguntarIA(SYSTEM_RECETA, content);
     parsed.categorias = limpiarCategorias(parsed.categorias);
     res.json(parsed);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- leer recetas desde un enlace ----------
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+function esIpPrivada(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  if (net.isIPv6(ip)) {
+    const l = ip.toLowerCase();
+    return l === '::' || l === '::1' || l.startsWith('fc') || l.startsWith('fd') || l.startsWith('fe80') || l.startsWith('::ffff:');
+  }
+  return true;
+}
+
+// Evita que el servidor se use para entrar en redes internas (localhost, 10.x, 192.168.x, metadatos de la nube...).
+// ALLOW_PRIVATE_URLS=1 solo se usa en pruebas locales.
+async function comprobarUrlPublica(u) {
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('Solo se admiten enlaces http o https');
+  if (process.env.ALLOW_PRIVATE_URLS === '1') return;
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  let ips;
+  try {
+    ips = net.isIP(host) ? [host] : (await dns.lookup(host, { all: true })).map(r => r.address);
+  } catch (e) {
+    throw new Error('No se encuentra esa dirección web');
+  }
+  if (!ips.length || ips.some(esIpPrivada)) throw new Error('Ese enlace no es válido');
+}
+
+async function descargar(urlStr) {
+  let u;
+  try { u = new URL(urlStr); } catch (e) { throw new Error('El enlace no es válido'); }
+  for (let i = 0; i < 5; i++) {
+    await comprobarUrlPublica(u);
+    let r;
+    try {
+      r = await fetch(u, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(15000),
+        headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml', 'Accept-Language': 'es-ES,es;q=0.9,en;q=0.5' },
+      });
+    } catch (e) {
+      throw new Error('No se pudo abrir la página (' + (e.name === 'TimeoutError' ? 'tardó demasiado' : 'sin conexión') + ')');
+    }
+    const destino = r.headers.get('location');
+    if (r.status >= 300 && r.status < 400 && destino) { u = new URL(destino, u); continue; }
+    if (!r.ok) throw new Error('La web respondió con el error ' + r.status + ' (puede que bloquee lecturas automáticas)');
+    const tipo = r.headers.get('content-type') || '';
+    if (!/text\/html|text\/plain|application\/xhtml/.test(tipo)) throw new Error('El enlace no es una página web de texto');
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > 5 * 1024 * 1024) throw new Error('La página es demasiado grande');
+    return { html: buf.toString('utf8'), url: u.toString() };
+  }
+  throw new Error('La página redirige demasiadas veces');
+}
+
+function cp(n) { try { return String.fromCodePoint(n); } catch (e) { return ''; } }
+function decodificarEntidades(s) {
+  return s.replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'").replace(/&#(\d+);/g, (m, n) => cp(+n)).replace(/&#x([0-9a-f]+);/gi, (m, h) => cp(parseInt(h, 16)))
+    .replace(/&amp;/g, '&');
+}
+
+function htmlATexto(html) {
+  return decodificarEntidades(
+    html
+      .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/<(script|style|noscript|svg|template|head)[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<\/(p|div|li|ul|ol|h[1-6]|tr|section|article|header|footer)>|<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+  ).split('\n').map(l => l.replace(/[ \t]+/g, ' ').trim()).filter(Boolean).join('\n');
+}
+
+// Muchas webs de recetas incluyen la receta ya estructurada (schema.org) dentro de la página.
+function recetaJsonLd(html) {
+  const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    let data;
+    try { data = JSON.parse(m[1].trim()); } catch (e) { continue; }
+    const nodos = [];
+    (function visitar(x) {
+      if (Array.isArray(x)) x.forEach(visitar);
+      else if (x && typeof x === 'object') { nodos.push(x); if (x['@graph']) visitar(x['@graph']); }
+    })(data);
+    const rec = nodos.find(n => [].concat(n['@type'] || []).includes('Recipe'));
+    if (rec) return rec;
+  }
+  return null;
+}
+
+function pasosJsonLd(x) {
+  if (!x) return [];
+  if (typeof x === 'string') return [x];
+  if (Array.isArray(x)) return x.flatMap(pasosJsonLd);
+  if (x.itemListElement) return pasosJsonLd(x.itemListElement);
+  return x.text ? [x.text] : (x.name ? [x.name] : []);
+}
+
+function textoDeReceta(rec) {
+  const partes = ['Título: ' + (rec.name || '')];
+  if (rec.recipeYield) partes.push('Raciones: ' + [].concat(rec.recipeYield).join(' '));
+  if (rec.recipeIngredient) partes.push('Ingredientes:\n' + [].concat(rec.recipeIngredient).join('\n'));
+  const pasos = pasosJsonLd(rec.recipeInstructions);
+  if (pasos.length) partes.push('Pasos:\n' + pasos.join('\n'));
+  return decodificarEntidades(partes.join('\n\n'));
+}
+
+function idYoutube(u) {
+  const h = u.hostname.replace(/^www\.|^m\./, '');
+  if (h === 'youtu.be') return u.pathname.slice(1).split('/')[0] || null;
+  if (h === 'youtube.com') {
+    if (u.pathname === '/watch') return u.searchParams.get('v');
+    const m = u.pathname.match(/^\/(?:embed|shorts)\/([\w-]{6,})/);
+    return m ? m[1] : null;
+  }
+  return null;
+}
+
+function datosYoutube(html) {
+  const t = html.match(/<meta property="og:title" content="([^"]*)"/);
+  const d = html.match(/"shortDescription":"((?:[^"\\]|\\.)*)"/);
+  let descripcion = '';
+  if (d) { try { descripcion = JSON.parse('"' + d[1] + '"'); } catch (e) { /* sin descripción */ } }
+  return { titulo: t ? decodificarEntidades(t[1]) : '', descripcion };
+}
+
+app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
+  try {
+    const url = String((req.body || {}).url || '').trim();
+    if (!url) return res.status(400).json({ error: 'Pega un enlace' });
+    let u;
+    try { u = new URL(url); } catch (e) { return res.status(400).json({ error: 'El enlace no es válido' }); }
+
+    let texto;
+    const extra = {};
+    const videoId = idYoutube(u);
+    if (videoId) {
+      const { html } = await descargar('https://www.youtube.com/watch?v=' + encodeURIComponent(videoId));
+      const y = datosYoutube(html);
+      if (y.descripcion.trim().length < 150) {
+        return res.status(422).json({ error: 'La descripción del vídeo no incluye la receta. Pega la transcripción en el cuadro de abajo.' });
+      }
+      texto = 'Título del vídeo: ' + y.titulo + '\n\nDescripción del vídeo:\n' + y.descripcion;
+      extra.video_id = videoId;
+    } else {
+      const { html, url: final } = await descargar(url);
+      const rec = recetaJsonLd(html);
+      const plano = htmlATexto(html);
+      if (!rec && plano.length < 300) {
+        return res.status(422).json({ error: 'No he podido leer esa página (puede cargar el contenido con JavaScript o estar protegida). Pega el texto de la receta en el cuadro de abajo.' });
+      }
+      texto = rec
+        ? 'DATOS ESTRUCTURADOS DE LA RECETA:\n' + textoDeReceta(rec) + '\n\nTEXTO DE LA PÁGINA (por si falta algo):\n' + plano.slice(0, 8000)
+        : plano.slice(0, 25000);
+      extra.source_url = final;
+    }
+
+    const parsed = await preguntarIA(SYSTEM_RECETA, [{ type: 'text', text: 'Extrae la receta de este texto:\n\n' + texto }]);
+    parsed.categorias = limpiarCategorias(parsed.categorias);
+    res.json({ ...parsed, ...extra });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
