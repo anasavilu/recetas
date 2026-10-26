@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const path = require('path');
 const dns = require('dns').promises;
 const net = require('net');
 const { createClient } = require('@supabase/supabase-js');
@@ -72,7 +73,34 @@ app.get('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   // Ves: las tuyas, las que otros han compartido y las antiguas sin propietario.
   const visibles = (data || []).filter(r => r.propietario === req.perfil || r.compartida || !r.propietario);
-  res.json(visibles);
+  // El enlace público solo lo ve su dueño; los demás perfiles solo saben que existe.
+  res.json(visibles.map(r => {
+    if (r.propietario === req.perfil) return r;
+    const { token_publico, ...resto } = r;
+    return { ...resto, publica: !!token_publico };
+  }));
+});
+
+// ---------- enlace público (solo lectura, sin PIN) ----------
+// Quien tenga el enlace puede ver esa receta, y nada más. El enlace lleva un código aleatorio imposible de adivinar.
+app.get('/api/publica/:token', async (req, res) => {
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  const token = String(req.params.token || '');
+  if (!/^[a-f0-9]{32}$/.test(token)) return res.status(404).json({ error: 'No disponible' });
+  const { data, error } = await supabase.from('recipes').select('*').eq('token_publico', token);
+  if (error) return res.status(500).json({ error: 'No disponible' });
+  const r = (data || [])[0];
+  if (!r) return res.status(404).json({ error: 'No disponible' });
+  res.json({
+    titulo: r.titulo, raciones: r.raciones, ingredientes: r.ingredientes, etiquetas: r.etiquetas,
+    categorias: r.categorias, pasos: r.pasos, origen: r.origen, source_url: r.source_url,
+    video_id: r.video_id, image_url: r.image_url,
+  });
+});
+
+app.get('/r/:token', (req, res) => {
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.sendFile(path.join(__dirname, 'public', 'r.html'));
 });
 
 app.post('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
@@ -120,6 +148,20 @@ app.patch('/api/recipes/:id/compartir', requireAuth, requirePerfil, async (req, 
   if (!receta) return res.status(404).json({ error: 'Receta no encontrada' });
   if (receta.propietario !== req.perfil) return res.status(403).json({ error: 'Solo quien guardó la receta puede cambiar esto' });
   const { data, error } = await supabase.from('recipes').update({ compartida: !!(req.body || {}).compartida }).eq('id', req.params.id).select();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data[0]);
+});
+
+app.patch('/api/recipes/:id/publico', requireAuth, requirePerfil, async (req, res) => {
+  const { data: rows, error: e1 } = await supabase.from('recipes').select('*').eq('id', req.params.id);
+  if (e1) return res.status(500).json({ error: e1.message });
+  const receta = (rows || [])[0];
+  if (!receta) return res.status(404).json({ error: 'Receta no encontrada' });
+  if (receta.propietario !== req.perfil) return res.status(403).json({ error: 'Solo quien guardó la receta puede cambiar esto' });
+  const activar = !!(req.body || {}).publica;
+  // Si ya estaba activo se conserva el mismo enlace; al desactivar se borra y el enlace antiguo deja de funcionar.
+  const token = activar ? (receta.token_publico || crypto.randomBytes(16).toString('hex')) : null;
+  const { data, error } = await supabase.from('recipes').update({ token_publico: token }).eq('id', req.params.id).select();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data[0]);
 });

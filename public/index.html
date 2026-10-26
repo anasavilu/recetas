@@ -133,6 +133,11 @@ button{font-family:inherit; cursor:pointer;}
 .srclink{font-size:0.8rem; color:var(--ink-soft); margin-top:16px; display:block;}
 .detailbar{display:flex; justify-content:space-between; align-items:center; margin-top:18px; flex-wrap:wrap; gap:10px;}
 .delbtn{border:1.3px solid var(--danger); color:var(--danger); background:none; padding:7px 12px; border-radius:3px; font-size:0.8rem;}
+.sharecol{display:flex; flex-direction:column; gap:10px; flex:1; min-width:240px;}
+.linkrow{display:flex; gap:6px; align-items:center;}
+.linkrow input{flex:1; min-width:0; padding:7px 9px; border:1.3px solid var(--line); border-radius:3px; font-family:inherit; font-size:0.8rem; background:var(--paper); color:var(--ink);}
+.verbox a{color:var(--herb); font-weight:600;}
+.sharecol .hint{margin:0;}
 
 .hint{font-size:0.78rem; color:var(--ink-soft); margin-bottom:12px; line-height:1.4;}
 .status{font-size:0.8rem; color:var(--herb); margin:10px 0; min-height:1em;}
@@ -181,10 +186,19 @@ let state = {
 const norm = s => (s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
 function normTag(t){ return (t||'').toLowerCase().trim().replace(/^(el|la|los|las|un|una)\s+/,''); }
 function escapeHtml(s){ const d=document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML; }
+// Reconoce enlaces de YouTube normales, cortos, Shorts, embed y con parámetros extra (?app=desktop&v=...)
 function extractYoutubeId(url){
-  if(!url) return null;
-  const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{6,})/);
-  return m ? m[1] : null;
+  try{
+    const u = new URL(String(url||'').trim());
+    const h = u.hostname.replace(/^www\.|^m\.|^music\./,'');
+    let id = null;
+    if(h === 'youtu.be') id = u.pathname.slice(1).split('/')[0];
+    else if(h === 'youtube.com'){
+      if(u.pathname === '/watch') id = u.searchParams.get('v');
+      else { const m = u.pathname.match(/^\/(?:embed|shorts|live)\/([^/?#]+)/); if(m) id = m[1]; }
+    }
+    return id && /^[\w-]{6,}$/.test(id) ? id : null;
+  }catch(e){ return null; }
 }
 function fileToBase64(file){
   return new Promise((resolve,reject)=>{
@@ -453,8 +467,12 @@ function renderGrid(){
     c.onclick = ()=>{ state.selected=r; state.modal='detail'; render(); };
     const kindLabel = {foto:'Foto', youtube:'YouTube', link:'Enlace', manual:'Manual'}[r.origen] || r.origen;
     let extra = '';
-    if(r.propietario === perfil && r.compartida) extra = ' · <span class="badge">compartida</span>';
-    else if(r.propietario !== perfil && r.propietario) extra = ' · de <span class="badge">'+escapeHtml(r.propietario)+'</span>';
+    if(r.propietario === perfil){
+      if(r.compartida) extra += ' · <span class="badge">compartida</span>';
+      if(r.token_publico) extra += ' · <span class="badge">enlace público</span>';
+    } else if(r.propietario){
+      extra = ' · de <span class="badge">'+escapeHtml(r.propietario)+'</span>';
+    }
     const racion = r.raciones ? ' · '+escapeHtml(r.raciones) : '';
     c.innerHTML = `
       <div class="kind">${kindLabel}${racion}${extra}</div>
@@ -570,13 +588,24 @@ function renderForm(){
   if(f.origen === 'youtube'){
     const field = el('div','field'); field.appendChild(el('label',null,'URL del vídeo'));
     const inp = el('input'); inp.type='url'; inp.placeholder='https://www.youtube.com/watch?v=...'; inp.value=f.sourceUrl;
-    inp.oninput = (e)=>{ f.sourceUrl = e.target.value; f.videoId = extractYoutubeId(e.target.value); };
+    // Enlace al vídeo normal (los Shorts no tienen "Mostrar transcripción"; el vídeo normal sí)
+    const verBox = el('div','hint verbox');
+    const verLink = el('a',null,'Abrir el vídeo para copiar su transcripción ↗'); verLink.target='_blank'; verLink.rel='noopener';
+    verBox.append(verLink, document.createTextNode(' · en el vídeo: «…» → «Mostrar transcripción» → copiar y pegar abajo'));
+    const actualizarVer = ()=>{
+      const id = extractYoutubeId(f.sourceUrl);
+      verBox.style.display = id ? '' : 'none';
+      if(id) verLink.href = 'https://www.youtube.com/watch?v=' + id;
+    };
+    inp.oninput = (e)=>{ f.sourceUrl = e.target.value; f.videoId = extractYoutubeId(e.target.value); actualizarVer(); };
     field.appendChild(inp); box.appendChild(field);
+    actualizarVer();
+    box.appendChild(verBox);
 
     const impBtn = el('button','aibtn','Leer receta desde el enlace');
     impBtn.onclick = ()=> importar(f);
     box.appendChild(impBtn);
-    box.appendChild(el('div','hint','Lee la descripción del vídeo y, si no trae la receta, intenta leer sus subtítulos (funciona en Shorts y vídeos con subtítulos automáticos). Si YouTube no lo permite, pega la transcripción aquí abajo.'));
+    box.appendChild(el('div','hint','Lee la descripción del vídeo y, si no trae la receta, intenta leer sus subtítulos. Si YouTube no lo permite (a veces bloquea al servidor), pega la transcripción aquí abajo.'));
 
     const field2 = el('div','field'); field2.appendChild(el('label',null,'Transcripción o descripción del vídeo (opcional)'));
     const ta = el('textarea'); ta.placeholder='Pega aquí la transcripción o la descripción del vídeo'; ta.value=f.rawText;
@@ -678,7 +707,7 @@ function renderForm(){
         categorias: f.categorias,
         pasos: f.pasos.filter(s=>s.trim()),
         origen: f.origen,
-        source_url: f.sourceUrl,
+        source_url: (f.origen==='youtube' && extractYoutubeId(f.sourceUrl)) ? 'https://www.youtube.com/watch?v=' + extractYoutubeId(f.sourceUrl) : f.sourceUrl,
         video_id: f.origen==='youtube' ? extractYoutubeId(f.sourceUrl) : '',
         compartida: f.compartida,
         image_base64: f.origen==='foto' ? f.imageB64 : '',
@@ -769,6 +798,8 @@ function renderDetailModal(){
   if(esMia || !r.propietario){
     const bar = el('div','detailbar');
     if(esMia){
+      const col = el('div','sharecol');
+
       const wrap = el('label','sharetoggle');
       const sw = el('button','switch'+(r.compartida?' on':'')); sw.type='button';
       sw.setAttribute('role','switch'); sw.setAttribute('aria-checked', String(!!r.compartida));
@@ -783,7 +814,38 @@ function renderDetailModal(){
         }catch(e){ alert('No se pudo cambiar: ' + e.message); }
       };
       wrap.append(sw, el('span',null,'Compartida con la familia'));
-      bar.appendChild(wrap);
+      col.appendChild(wrap);
+
+      // Enlace público: cualquiera con el enlace puede ver esta receta, sin PIN ni perfil
+      const wrapP = el('label','sharetoggle');
+      const swP = el('button','switch'+(r.token_publico?' on':'')); swP.type='button';
+      swP.setAttribute('role','switch'); swP.setAttribute('aria-checked', String(!!r.token_publico));
+      swP.innerHTML = '<span class="dot"></span>';
+      swP.onclick = async ()=>{
+        try{
+          const nueva = await api('/api/recipes/'+r.id+'/publico', { method:'PATCH', body: JSON.stringify({ publica: !r.token_publico }) });
+          r.token_publico = nueva.token_publico;
+          render();
+        }catch(e){ alert('No se pudo cambiar: ' + e.message); }
+      };
+      wrapP.append(swP, el('span',null,'Enlace público para cualquier persona'));
+      col.appendChild(wrapP);
+
+      if(r.token_publico){
+        const url = location.origin + '/r/' + r.token_publico;
+        const row = el('div','linkrow');
+        const inp = el('input'); inp.type='text'; inp.readOnly = true; inp.value = url;
+        inp.onfocus = ()=> inp.select();
+        const cop = el('button','aibtn','Copiar');
+        cop.onclick = async ()=>{
+          try{ await navigator.clipboard.writeText(url); }catch(e){ inp.select(); try{ document.execCommand('copy'); }catch(e2){} }
+          cop.textContent = 'Copiado'; setTimeout(()=>{ cop.textContent = 'Copiar'; }, 1500);
+        };
+        row.append(inp, cop);
+        col.appendChild(row);
+        col.appendChild(el('div','hint','Quien tenga este enlace puede ver la receta (sin PIN ni perfil), pero no el resto de tus recetas. Apaga el interruptor para que el enlace deje de funcionar.'));
+      }
+      bar.appendChild(col);
     } else {
       bar.appendChild(el('span'));
     }

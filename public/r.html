@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Receta · Recetario</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600&display=swap');
+:root{
+  --paper:#EEF0E2; --paper-card:#F7F8EF; --ink:#23261F; --ink-soft:#5B5F51;
+  --herb:#4E6E4E; --herb-tint:#E1E8CF; --line:#C7C2A9;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0; background:var(--paper);
+  background-image: radial-gradient(var(--line) 0.6px, transparent 0.6px);
+  background-size: 18px 18px;
+  color:var(--ink); font-family:'Space Grotesk', sans-serif; min-height:100vh;
+}
+h1,h2{font-family:'Fraunces', serif; margin:0; font-weight:600;}
+.wrap{max-width:720px; margin:0 auto; padding:28px 16px 60px;}
+.brand{font-family:'Fraunces', serif; color:var(--ink-soft); margin-bottom:14px; font-size:1rem;}
+.card{background:var(--paper-card); border:1.5px solid var(--ink); border-radius:6px; padding:24px; box-shadow:6px 6px 0 var(--ink);}
+.card h1{font-size:1.8rem; line-height:1.15; margin-bottom:6px;}
+.racion{color:var(--ink-soft); font-size:0.9rem; margin:0 0 14px;}
+.media{margin:14px 0;}
+.media img{width:100%; border:1.3px solid var(--ink); border-radius:4px; display:block;}
+.media iframe{width:100%; aspect-ratio:16/9; border:1.3px solid var(--ink); border-radius:4px;}
+.tags{display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 18px;}
+.chip{padding:4px 11px; border:1.3px solid var(--ink); border-radius:999px; font-size:0.78rem; color:var(--ink);}
+.chip.cat{background:var(--herb-tint); border-color:var(--herb); color:var(--herb);}
+.cols{display:grid; grid-template-columns:1fr 1.4fr; gap:22px;}
+@media(max-width:560px){.cols{grid-template-columns:1fr;} .card{padding:18px;}}
+.cols h2{font-size:1rem; color:var(--ink-soft); margin-bottom:8px; font-family:'Space Grotesk', sans-serif; font-weight:600;}
+.cols ul, .cols ol{padding-left:18px; margin:0; display:flex; flex-direction:column; gap:7px; font-size:0.95rem; line-height:1.4;}
+.src{display:block; margin-top:18px; font-size:0.85rem; color:var(--herb);}
+.pie{margin-top:18px; font-size:0.78rem; color:var(--ink-soft); text-align:center;}
+.vacio{text-align:center; padding:30px 10px;}
+.vacio h1{font-size:1.4rem; margin-bottom:8px;}
+.vacio p{color:var(--ink-soft); margin:0;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">Recetario</div>
+  <div class="card" id="root"><p class="racion">Cargando receta…</p></div>
+  <div class="pie">Receta compartida con un enlace privado</div>
+</div>
+
+<script>
+const root = document.getElementById('root');
+function el(tag, cls, text){ const e = document.createElement(tag); if(cls) e.className = cls; if(text != null) e.textContent = text; return e; }
+
+function noDisponible(){
+  root.innerHTML = '';
+  const v = el('div','vacio');
+  v.append(el('h1',null,'Esta receta no está disponible'), el('p',null,'El enlace puede haber dejado de compartirse o no ser correcto.'));
+  root.appendChild(v);
+  document.title = 'Receta no disponible · Recetario';
+}
+
+function pintar(r){
+  document.title = r.titulo + ' · Recetario';
+  root.innerHTML = '';
+  root.appendChild(el('h1',null,r.titulo));
+  if(r.raciones) root.appendChild(el('p','racion',r.raciones));
+
+  if(r.origen === 'foto' && typeof r.image_url === 'string' && /^https:\/\//.test(r.image_url)){
+    const m = el('div','media'); const img = el('img'); img.src = r.image_url; img.alt = r.titulo;
+    m.appendChild(img); root.appendChild(m);
+  }
+  if(r.origen === 'youtube' && typeof r.video_id === 'string' && /^[\w-]{6,}$/.test(r.video_id)){
+    const m = el('div','media'); const fr = el('iframe');
+    fr.src = 'https://www.youtube.com/embed/' + encodeURIComponent(r.video_id); fr.allowFullscreen = true;
+    fr.title = 'Vídeo de la receta';
+    m.appendChild(fr); root.appendChild(m);
+  }
+
+  const tags = el('div','tags');
+  (r.categorias||[]).forEach(t => tags.appendChild(el('span','chip cat',t)));
+  (r.etiquetas||[]).forEach(t => tags.appendChild(el('span','chip',t)));
+  if(tags.children.length) root.appendChild(tags);
+
+  const cols = el('div','cols');
+  const ing = el('div'); ing.appendChild(el('h2',null,'Ingredientes'));
+  const ul = el('ul'); (r.ingredientes||[]).forEach(i => ul.appendChild(el('li',null,i))); ing.appendChild(ul);
+  const pas = el('div'); pas.appendChild(el('h2',null,'Pasos'));
+  const ol = el('ol'); (r.pasos||[]).forEach(p => ol.appendChild(el('li',null,p))); pas.appendChild(ol);
+  cols.append(ing, pas);
+  root.appendChild(cols);
+
+  if(typeof r.source_url === 'string' && /^https?:\/\//i.test(r.source_url)){
+    const a = el('a','src','Ver la fuente original ↗'); a.href = r.source_url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    root.appendChild(a);
+  }
+}
+
+(async ()=>{
+  const token = location.pathname.split('/').filter(Boolean).pop() || '';
+  try{
+    const res = await fetch('/api/publica/' + encodeURIComponent(token));
+    if(!res.ok) throw new Error('no');
+    pintar(await res.json());
+  }catch(e){ noDisponible(); }
+})();
+</script>
+</body>
+</html>

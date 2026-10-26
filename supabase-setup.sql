@@ -35,3 +35,7 @@ create unique index if not exists perfiles_nombre_unico on perfiles (lower(nombr
 -- Después, ve a Storage (menú lateral) -> "New bucket" (solo si aún no lo creaste)
 -- Nombre: images
 -- Marca la opción "Public bucket" para que las fotos se puedan ver desde la app.
+
+-- Enlace público de solo lectura por receta (se añadió después):
+alter table recipes add column if not exists token_publico text;
+create unique index if not exists recipes_token_publico_unico on recipes (token_publico) where token_publico is not null;
