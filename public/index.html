@@ -138,6 +138,9 @@ button{font-family:inherit; cursor:pointer;}
 .linkrow input{flex:1; min-width:0; padding:7px 9px; border:1.3px solid var(--line); border-radius:3px; font-family:inherit; font-size:0.8rem; background:var(--paper); color:var(--ink);}
 .verbox a{color:var(--herb); font-weight:600;}
 .sharecol .hint{margin:0;}
+.sharebox{display:flex; flex-direction:column; gap:8px;}
+.permlist .hint{margin:0 0 6px;}
+.savebtn{margin-left:auto;}
 
 .hint{font-size:0.78rem; color:var(--ink-soft); margin-bottom:12px; line-height:1.4;}
 .status{font-size:0.8rem; color:var(--herb); margin:10px 0; min-height:1em;}
@@ -394,14 +397,14 @@ function renderHeader(){
   left.appendChild(who);
   top.appendChild(left);
   const btn = el('button','newbtn','+ Nueva receta');
-  btn.onclick = ()=>{ state.modal='add'; state.addStep='source'; state.form=null; state.aiStatus=''; render(); };
+  btn.onclick = async ()=>{ await loadPerfiles(); state.modal='add'; state.addStep='source'; state.form=null; state.aiStatus=''; render(); };
   top.appendChild(btn);
   wrap.appendChild(top);
 
   const tabs = el('div','tabs');
   const mias = state.recipes.filter(r=>r.propietario===perfil).length;
   const fam = state.recipes.length - mias;
-  [['mias','Mis recetas ('+mias+')'],['familia','De la familia ('+fam+')']].forEach(([k,label])=>{
+  [['mias','Mis recetas ('+mias+')'],['familia','Compartidas conmigo ('+fam+')']].forEach(([k,label])=>{
     const b = el('button','tab'+(state.tab===k?' active':''), label);
     b.onclick = ()=>{ state.tab=k; state.activeCats=new Set(); state.activeTags=new Set(); render(); };
     tabs.appendChild(b);
@@ -457,18 +460,19 @@ function renderGrid(){
     } else if(state.tab==='mias'){
       e.innerHTML = '<h3>Aún no has guardado ninguna receta</h3><p>Añade la primera desde una foto, un vídeo de YouTube o un enlace.</p>';
     } else {
-      e.innerHTML = '<h3>Nadie ha compartido recetas todavía</h3><p>Cuando alguien comparta una, aparecerá aquí.</p>';
+      e.innerHTML = '<h3>Nadie ha compartido recetas contigo todavía</h3><p>Cuando otro perfil comparta una contigo, aparecerá aquí.</p>';
     }
     return e;
   }
   const grid = el('div','grid');
   items.forEach(r=>{
     const c = el('div','card');
-    c.onclick = ()=>{ state.selected=r; state.modal='detail'; render(); };
+    c.onclick = async ()=>{ await loadPerfiles(); state.selected=r; state.modal='detail'; render(); };
     const kindLabel = {foto:'Foto', youtube:'YouTube', link:'Enlace', manual:'Manual'}[r.origen] || r.origen;
     let extra = '';
     if(r.propietario === perfil){
-      if(r.compartida) extra += ' · <span class="badge">compartida</span>';
+      if(r.compartida) extra += ' · <span class="badge">compartida con todos</span>';
+      else if((r.compartida_con||[]).length) extra += ' · <span class="badge">con '+escapeHtml(r.compartida_con.join(', '))+'</span>';
       if(r.token_publico) extra += ' · <span class="badge">enlace público</span>';
     } else if(r.propietario){
       extra = ' · de <span class="badge">'+escapeHtml(r.propietario)+'</span>';
@@ -504,7 +508,7 @@ function renderAddModal(){
       const b = el('button',null,label);
       b.onclick = ()=>{
         state.addStep = 'form';
-        state.form = { titulo:'', raciones:'', ingredientes:[], etiquetas:[], categorias:[], pasos:[], origen:k, sourceUrl:'', imageB64:'', imageMime:'', videoId:'', rawText:'', compartida:false };
+        state.form = { titulo:'', raciones:'', ingredientes:[], etiquetas:[], categorias:[], pasos:[], origen:k, sourceUrl:'', imageB64:'', imageMime:'', videoId:'', rawText:'', compartida:false, compartidaCon:[] };
         render();
       };
       choice.appendChild(b);
@@ -558,6 +562,49 @@ async function importar(f){
     state.aiStatus = 'Listo. Revisa y ajusta antes de guardar.';
   }catch(e){ state.aiStatus = 'No se pudo leer el enlace: ' + e.message; }
   render();
+}
+
+// Selector de con quién compartir: "todos los perfiles" o solo perfiles concretos.
+// "datos" ({compartida, con}) se modifica en sitio; "cambio" se llama después de cada cambio.
+function renderCompartir(datos, cambio){
+  const box = el('div','sharebox');
+  const otros = state.perfiles.filter(n => n !== perfil);
+  const lista = el('div','permlist');
+
+  const wrapT = el('label','sharetoggle');
+  const sw = el('button','switch'+(datos.compartida?' on':'')); sw.type='button';
+  sw.setAttribute('role','switch'); sw.setAttribute('aria-checked', String(!!datos.compartida));
+  sw.innerHTML = '<span class="dot"></span>';
+  sw.onclick = ()=>{
+    datos.compartida = !datos.compartida;
+    sw.classList.toggle('on', datos.compartida); sw.setAttribute('aria-checked', String(datos.compartida));
+    lista.style.display = datos.compartida ? 'none' : '';
+    cambio();
+  };
+  wrapT.append(sw, el('span',null,'Con todos los perfiles'));
+  box.appendChild(wrapT);
+
+  if(!otros.length){
+    lista.appendChild(el('div','hint','Aún no hay otros perfiles. Cada persona crea el suyo al entrar con el PIN.'));
+  } else {
+    lista.appendChild(el('div','hint','…o solo con estos perfiles:'));
+    const chips = el('div','tagrow');
+    otros.forEach(n=>{
+      const b = el('button','chip'+(datos.con.includes(n)?' on':''), n); b.type='button';
+      b.setAttribute('aria-pressed', String(datos.con.includes(n)));
+      b.onclick = ()=>{
+        const i = datos.con.indexOf(n);
+        if(i>=0) datos.con.splice(i,1); else datos.con.push(n);
+        b.classList.toggle('on', i<0); b.setAttribute('aria-pressed', String(i<0));
+        cambio();
+      };
+      chips.appendChild(b);
+    });
+    lista.appendChild(chips);
+  }
+  lista.style.display = datos.compartida ? 'none' : '';
+  box.appendChild(lista);
+  return box;
 }
 
 function renderForm(){
@@ -685,14 +732,13 @@ function renderForm(){
   box.appendChild(renderEditableList('Etiquetas de ingredientes', f.etiquetas, 'etiqueta', normTag));
   box.appendChild(renderEditableList('Pasos', f.pasos, 'paso', s=>s));
 
+  const shareField = el('div','field'); shareField.appendChild(el('label',null,'Compartir con (por defecto, solo tú la ves)'));
+  shareField.appendChild(renderCompartir({
+    get compartida(){ return f.compartida; }, set compartida(v){ f.compartida = v; }, con: f.compartidaCon,
+  }, ()=>{}));
+  box.appendChild(shareField);
+
   const savebar = el('div','savebar');
-  const toggleWrap = el('label','sharetoggle');
-  const sw = el('button','switch'+(f.compartida?' on':'')); sw.type='button';
-  sw.setAttribute('role','switch'); sw.setAttribute('aria-checked', String(f.compartida));
-  sw.innerHTML = '<span class="dot"></span>';
-  sw.onclick = ()=>{ f.compartida = !f.compartida; sw.classList.toggle('on'); sw.setAttribute('aria-checked', String(f.compartida)); };
-  toggleWrap.append(sw, el('span',null,'Compartir con la familia'));
-  savebar.appendChild(toggleWrap);
 
   const saveBtn = el('button','savebtn','Guardar receta');
   saveBtn.onclick = async ()=>{
@@ -710,6 +756,7 @@ function renderForm(){
         source_url: (f.origen==='youtube' && extractYoutubeId(f.sourceUrl)) ? 'https://www.youtube.com/watch?v=' + extractYoutubeId(f.sourceUrl) : f.sourceUrl,
         video_id: f.origen==='youtube' ? extractYoutubeId(f.sourceUrl) : '',
         compartida: f.compartida,
+        compartida_con: f.compartida ? [] : f.compartidaCon,
         image_base64: f.origen==='foto' ? f.imageB64 : '',
         image_mime: f.origen==='foto' ? f.imageMime : '',
       })});
@@ -800,21 +847,15 @@ function renderDetailModal(){
     if(esMia){
       const col = el('div','sharecol');
 
-      const wrap = el('label','sharetoggle');
-      const sw = el('button','switch'+(r.compartida?' on':'')); sw.type='button';
-      sw.setAttribute('role','switch'); sw.setAttribute('aria-checked', String(!!r.compartida));
-      sw.innerHTML = '<span class="dot"></span>';
-      sw.onclick = async ()=>{
-        const nuevo = !r.compartida;
+      col.appendChild(el('div','hint','Compartir esta receta con:'));
+      const datos = { compartida: !!r.compartida, con: (r.compartida_con||[]).slice() };
+      col.appendChild(renderCompartir(datos, async ()=>{
         try{
-          await api('/api/recipes/'+r.id+'/compartir', { method:'PATCH', body: JSON.stringify({ compartida: nuevo }) });
-          r.compartida = nuevo;
-          sw.classList.toggle('on', nuevo); sw.setAttribute('aria-checked', String(nuevo));
+          await api('/api/recipes/'+r.id+'/compartir', { method:'PATCH', body: JSON.stringify({ compartida: datos.compartida, con: datos.con }) });
+          r.compartida = datos.compartida; r.compartida_con = datos.con.slice();
           fillResults();
         }catch(e){ alert('No se pudo cambiar: ' + e.message); }
-      };
-      wrap.append(sw, el('span',null,'Compartida con la familia'));
-      col.appendChild(wrap);
+      }));
 
       // Enlace público: cualquiera con el enlace puede ver esta receta, sin PIN ni perfil
       const wrapP = el('label','sharetoggle');

@@ -67,16 +67,25 @@ app.post('/api/perfiles', requireAuth, async (req, res) => {
   res.json(data[0]);
 });
 
+// Deja solo nombres de perfiles que existen (y que no sean el del dueño). Sirve para "compartir con estos perfiles".
+async function limpiarPerfiles(lista, propietario) {
+  if (!Array.isArray(lista) || !lista.length) return [];
+  const { data } = await supabase.from('perfiles').select('nombre');
+  const validos = new Set((data || []).map(p => p.nombre));
+  return [...new Set(lista.map(String))].filter(n => validos.has(n) && n !== propietario);
+}
+
 // ---------- recetas ----------
 app.get('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
   const { data, error } = await supabase.from('recipes').select('*').order('creado', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
-  // Ves: las tuyas, las que otros han compartido y las antiguas sin propietario.
-  const visibles = (data || []).filter(r => r.propietario === req.perfil || r.compartida || !r.propietario);
-  // El enlace público solo lo ve su dueño; los demás perfiles solo saben que existe.
+  // Ves: las tuyas, las compartidas con todos, las compartidas contigo y las antiguas sin propietario.
+  const visibles = (data || []).filter(r =>
+    r.propietario === req.perfil || r.compartida || !r.propietario || (r.compartida_con || []).includes(req.perfil));
+  // El enlace público y la lista de perfiles con los que se comparte solo los ve el dueño.
   res.json(visibles.map(r => {
     if (r.propietario === req.perfil) return r;
-    const { token_publico, ...resto } = r;
+    const { token_publico, compartida_con, ...resto } = r;
     return { ...resto, publica: !!token_publico };
   }));
 });
@@ -105,8 +114,9 @@ app.get('/r/:token', (req, res) => {
 
 app.post('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
   try {
-    const { titulo, ingredientes, etiquetas, categorias, raciones, pasos, origen, source_url, video_id, compartida, image_base64, image_mime } = req.body;
+    const { titulo, ingredientes, etiquetas, categorias, raciones, pasos, origen, source_url, video_id, compartida, compartida_con, image_base64, image_mime } = req.body;
     if (!titulo || !titulo.trim()) return res.status(400).json({ error: 'Falta el título' });
+    const con = await limpiarPerfiles(compartida_con, req.perfil);
 
     let image_url = null;
     if (image_base64) {
@@ -132,6 +142,8 @@ app.post('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
       image_url,
       propietario: req.perfil,
       compartida: !!compartida,
+      // Solo se envía si hay perfiles elegidos: así guardar recetas nunca depende de la columna nueva.
+      ...(con.length ? { compartida_con: con } : {}),
     }]).select();
 
     if (error) return res.status(500).json({ error: error.message });
@@ -147,7 +159,13 @@ app.patch('/api/recipes/:id/compartir', requireAuth, requirePerfil, async (req, 
   const receta = (rows || [])[0];
   if (!receta) return res.status(404).json({ error: 'Receta no encontrada' });
   if (receta.propietario !== req.perfil) return res.status(403).json({ error: 'Solo quien guardó la receta puede cambiar esto' });
-  const { data, error } = await supabase.from('recipes').update({ compartida: !!(req.body || {}).compartida }).eq('id', req.params.id).select();
+  // Se puede cambiar "compartida" (con todos), "con" (lista de perfiles concretos), o las dos cosas.
+  const b = req.body || {};
+  const cambios = {};
+  if ('compartida' in b) cambios.compartida = !!b.compartida;
+  if ('con' in b) cambios.compartida_con = await limpiarPerfiles(b.con, req.perfil);
+  if (!Object.keys(cambios).length) return res.status(400).json({ error: 'Nada que cambiar' });
+  const { data, error } = await supabase.from('recipes').update(cambios).eq('id', req.params.id).select();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data[0]);
 });

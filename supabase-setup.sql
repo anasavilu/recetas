@@ -39,3 +39,6 @@ create unique index if not exists perfiles_nombre_unico on perfiles (lower(nombr
 -- Enlace público de solo lectura por receta (se añadió después):
 alter table recipes add column if not exists token_publico text;
 create unique index if not exists recipes_token_publico_unico on recipes (token_publico) where token_publico is not null;
+
+-- Compartir una receta con perfiles concretos (además de "con todos"):
+alter table recipes add column if not exists compartida_con text[] not null default '{}';
