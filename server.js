@@ -477,6 +477,27 @@ async function subtitulosYoutube(videoId, html) {
   return '';
 }
 
+function esTiktok(u) {
+  return /^(?:[\w-]+\.)*tiktok\.com$/i.test(u.hostname);
+}
+
+// Lee la descripción de un TikTok desde su página (metaetiquetas o datos incrustados).
+function datosTiktok(html) {
+  const meta = (prop) => {
+    const m = html.match(new RegExp('<meta[^>]+(?:property|name)=["\']' + prop + '["\'][^>]*content=["\']([^"\']*)["\']', 'i'))
+      || html.match(new RegExp('<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:property|name)=["\']' + prop + '["\']', 'i'));
+    return m ? decodificarEntidades(m[1]) : '';
+  };
+  let desc = '';
+  const j = html.match(/"desc":"((?:[^"\\]|\\.)*)"/);
+  if (j) { try { desc = JSON.parse('"' + j[1] + '"'); } catch (e) { /* se usa la metaetiqueta */ } }
+  if (!desc) desc = meta('og:description') || meta('description');
+  const a = html.match(/"nickname":"((?:[^"\\]|\\.)*)"/);
+  let autor = '';
+  if (a) { try { autor = JSON.parse('"' + a[1] + '"'); } catch (e) { /* sin autor */ } }
+  return { descripcion: desc, autor };
+}
+
 app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
   try {
     const url = String((req.body || {}).url || '').trim();
@@ -510,6 +531,19 @@ app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
       texto = 'Título del vídeo: ' + y.titulo + '\n\nDescripción del vídeo:\n' + y.descripcion;
       if (subs) texto += '\n\nSubtítulos del vídeo (transcripción automática de lo que se dice):\n' + subs;
       extra.video_id = videoId;
+    } else if (esTiktok(u)) {
+      let pagina;
+      try { pagina = await descargar(url); } catch (e) {
+        return res.status(422).json({ error: 'TikTok no ha dejado leer ese vídeo desde el servidor (' + e.message + '). Copia la descripción del vídeo y pégala en el cuadro de abajo.' });
+      }
+      const t = datosTiktok(pagina.html);
+      const desc = t.descripcion.trim();
+      if (desc.length < 80 || !/ingredient|gramos|\bg\b|cucharad|\d/i.test(desc)) {
+        const vista = desc.replace(/\s+/g, ' ').slice(0, 80);
+        return res.status(422).json({ error: 'La descripción de este TikTok no trae la receta' + (vista ? ' (dice: «' + vista + '»)' : ' (no he podido leerla)') + '. Seguramente la receta va hablada en el vídeo: pega aquí los ingredientes y los pasos.' });
+      }
+      texto = 'Descripción del TikTok' + (t.autor ? ' (de ' + t.autor + ')' : '') + ':\n' + desc;
+      extra.source_url = pagina.url.split('?')[0];
     } else {
       const { html, url: final } = await descargar(url);
       const rec = recetaJsonLd(html);
