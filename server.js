@@ -337,7 +337,8 @@ function datosYoutube(html) {
   const d = html.match(/"shortDescription":"((?:[^"\\]|\\.)*)"/);
   let descripcion = '';
   if (d) { try { descripcion = JSON.parse('"' + d[1] + '"'); } catch (e) { /* sin descripción */ } }
-  return { titulo: t ? decodificarEntidades(t[1]) : '', descripcion };
+  // leido=false: YouTube no ha devuelto los datos del vídeo (bloqueo, aviso de cookies...)
+  return { titulo: t ? decodificarEntidades(t[1]) : '', descripcion, leido: !!d };
 }
 
 app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
@@ -353,8 +354,12 @@ app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
     if (videoId) {
       const { html } = await descargar('https://www.youtube.com/watch?v=' + encodeURIComponent(videoId));
       const y = datosYoutube(html);
+      if (!y.leido) {
+        return res.status(422).json({ error: 'YouTube no ha dejado leer ese vídeo desde el servidor. Pega la transcripción o la descripción en el cuadro de abajo.' });
+      }
       if (y.descripcion.trim().length < 150) {
-        return res.status(422).json({ error: 'La descripción del vídeo no incluye la receta. Pega la transcripción en el cuadro de abajo.' });
+        const vista = y.descripcion.replace(/\s+/g, ' ').trim().slice(0, 80);
+        return res.status(422).json({ error: 'La descripción del vídeo es muy corta y no incluye la receta' + (vista ? ' (dice: «' + vista + '»)' : ' (está vacía)') + '. Pega la transcripción en el cuadro de abajo.' });
       }
       texto = 'Título del vídeo: ' + y.titulo + '\n\nDescripción del vídeo:\n' + y.descripcion;
       extra.video_id = videoId;
