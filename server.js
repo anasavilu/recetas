@@ -479,19 +479,30 @@ async function subtitulosYoutube(videoId, html) {
 
 // Servicio externo de transcripciones (Supadata): YouTube bloquea la IP de Render, ellos no.
 // Solo se usa si hay clave SUPADATA_API_KEY; mode=native lee subtítulos ya existentes (no genera con IA).
+let motivoSupadata = '';
 async function subtitulosSupadata(videoId) {
+  motivoSupadata = '';
   const clave = process.env.SUPADATA_API_KEY;
-  if (!clave) return '';
+  if (!clave) { motivoSupadata = 'Falta la variable SUPADATA_API_KEY en Render (o no se ha redesplegado todavía).'; return ''; }
   try {
     const url = 'https://api.supadata.ai/v1/transcript?text=true&mode=native&url=' +
       encodeURIComponent('https://www.youtube.com/watch?v=' + videoId);
     const r = await fetch(url, { headers: { 'x-api-key': clave }, signal: AbortSignal.timeout(25000) });
-    if (!r.ok) { console.error('Supadata respondió', r.status); return ''; }
+    if (!r.ok) {
+      console.error('Supadata respondió', r.status);
+      motivoSupadata = r.status === 401 || r.status === 403 ? 'Supadata ha rechazado la clave (error ' + r.status + '): revisa que esté bien copiada.'
+        : r.status === 429 ? 'Supadata dice que se han acabado las peticiones del plan gratuito (error 429).'
+        : r.status === 404 || r.status === 206 ? 'Supadata no encuentra subtítulos en ese vídeo.'
+        : 'Supadata respondió con el error ' + r.status + '.';
+      return '';
+    }
     const j = await r.json();
     const t = typeof j.content === 'string' ? j.content
       : Array.isArray(j.content) ? j.content.map(s => s.text).join(' ') : '';
-    return t.replace(/\s+/g, ' ').trim().slice(0, 30000);
-  } catch (e) { console.error('Supadata falló:', e.message); return ''; }
+    const out = t.replace(/\s+/g, ' ').trim().slice(0, 30000);
+    if (!out) motivoSupadata = 'Supadata no ha devuelto subtítulos para ese vídeo.';
+    return out;
+  } catch (e) { console.error('Supadata falló:', e.message); motivoSupadata = 'No se pudo contactar con Supadata (' + e.message + ').'; return ''; }
 }
 
 function esTiktok(u) {
@@ -537,7 +548,7 @@ app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
 
       if (!descSirve && !subs) {
         if (!y.leido) {
-          return res.status(422).json({ error: 'YouTube no ha dejado leer ese vídeo desde el servidor (ni la descripción ni los subtítulos). Pega la transcripción o la descripción en el cuadro de abajo.' });
+          return res.status(422).json({ error: 'YouTube no ha dejado leer ese vídeo desde el servidor (ni la descripción ni los subtítulos).' + (motivoSupadata ? ' ' + motivoSupadata : '') + ' Pega la transcripción o la descripción en el cuadro de abajo.' });
         }
         if (desc.length < 150) {
           const vista = desc.replace(/\s+/g, ' ').slice(0, 80);
