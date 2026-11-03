@@ -477,6 +477,23 @@ async function subtitulosYoutube(videoId, html) {
   return '';
 }
 
+// Servicio externo de transcripciones (Supadata): YouTube bloquea la IP de Render, ellos no.
+// Solo se usa si hay clave SUPADATA_API_KEY; mode=native lee subtítulos ya existentes (no genera con IA).
+async function subtitulosSupadata(videoId) {
+  const clave = process.env.SUPADATA_API_KEY;
+  if (!clave) return '';
+  try {
+    const url = 'https://api.supadata.ai/v1/transcript?text=true&mode=native&url=' +
+      encodeURIComponent('https://www.youtube.com/watch?v=' + videoId);
+    const r = await fetch(url, { headers: { 'x-api-key': clave }, signal: AbortSignal.timeout(25000) });
+    if (!r.ok) { console.error('Supadata respondió', r.status); return ''; }
+    const j = await r.json();
+    const t = typeof j.content === 'string' ? j.content
+      : Array.isArray(j.content) ? j.content.map(s => s.text).join(' ') : '';
+    return t.replace(/\s+/g, ' ').trim().slice(0, 30000);
+  } catch (e) { console.error('Supadata falló:', e.message); return ''; }
+}
+
 function esTiktok(u) {
   return /^(?:[\w-]+\.)*tiktok\.com$/i.test(u.hostname);
 }
@@ -516,7 +533,7 @@ app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
       const descSirve = desc.length >= 150 && /ingredient/i.test(desc);
 
       let subs = '';
-      if (!descSirve) subs = await subtitulosYoutube(videoId, html);
+      if (!descSirve) subs = await subtitulosSupadata(videoId) || await subtitulosYoutube(videoId, html);
 
       if (!descSirve && !subs) {
         if (!y.leido) {
