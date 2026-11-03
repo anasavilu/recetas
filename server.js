@@ -480,28 +480,51 @@ async function subtitulosYoutube(videoId, html) {
 // Servicio externo de transcripciones (Supadata): YouTube bloquea la IP de Render, ellos no.
 // Solo se usa si hay clave SUPADATA_API_KEY; mode=native lee subtítulos ya existentes (no genera con IA).
 let motivoSupadata = '';
+async function pedirSupadata(videoId, modo, clave) {
+  const base = 'https://api.supadata.ai/v1/transcript';
+  const cab = { 'x-api-key': clave };
+  const url = base + '?text=true&mode=' + modo + '&url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + videoId);
+  let r = await fetch(url, { headers: cab, signal: AbortSignal.timeout(25000) });
+  let j = null;
+  try { j = await r.json(); } catch (e) { /* sin cuerpo */ }
+  if (r.status === 202 && j && j.jobId) {
+    // transcripción con IA: trabajo asíncrono, se consulta hasta ~50 s
+    for (let i = 0; i < 25; i++) {
+      await new Promise(ok => setTimeout(ok, 2000));
+      r = await fetch(base + '/' + encodeURIComponent(j.jobId), { headers: cab, signal: AbortSignal.timeout(15000) });
+      try { j = await r.json(); } catch (e) { j = null; }
+      if (j && j.status === 'completed') break;
+      if (j && j.status === 'failed') { motivoSupadata = 'Supadata no ha podido transcribir el audio de ese vídeo.'; return ''; }
+    }
+    if (!j || j.status !== 'completed') { motivoSupadata = 'La transcripción del audio tardó demasiado.'; return ''; }
+  } else if (r.status === 404 || (j && /unavailable|not-found/i.test(String(j.error || '')))) {
+    return ''; // sin subtítulos: quien llama decide si prueba con la transcripción del audio
+  } else if (!r.ok) {
+    console.error('Supadata respondió', r.status, JSON.stringify(j || {}).slice(0, 200));
+    motivoSupadata = r.status === 401 || r.status === 403 ? 'Supadata ha rechazado la clave (error ' + r.status + '): revisa que esté bien copiada.'
+      : r.status === 429 ? 'Supadata dice que se han acabado las peticiones del plan gratuito (error 429).'
+      : r.status === 402 ? 'Supadata dice que no te quedan créditos (error 402).'
+      : 'Supadata respondió con el error ' + r.status + (j && (j.message || j.error) ? ' (' + (j.message || j.error) + ')' : '') + '.';
+    return '';
+  }
+  const c = j && j.content;
+  const t = typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x.text).join(' ') : '';
+  return t.replace(/\s+/g, ' ').trim().slice(0, 30000);
+}
+
+// Servicio externo de transcripciones (Supadata): YouTube bloquea la IP de Render, ellos no.
+// Solo se usa si hay clave SUPADATA_API_KEY. Primero subtítulos existentes (native); si no hay, transcribe el audio (auto).
 async function subtitulosSupadata(videoId) {
   motivoSupadata = '';
   const clave = process.env.SUPADATA_API_KEY;
   if (!clave) { motivoSupadata = 'Falta la variable SUPADATA_API_KEY en Render (o no se ha redesplegado todavía).'; return ''; }
   try {
-    const url = 'https://api.supadata.ai/v1/transcript?text=true&mode=native&url=' +
-      encodeURIComponent('https://www.youtube.com/watch?v=' + videoId);
-    const r = await fetch(url, { headers: { 'x-api-key': clave }, signal: AbortSignal.timeout(25000) });
-    if (!r.ok) {
-      console.error('Supadata respondió', r.status);
-      motivoSupadata = r.status === 401 || r.status === 403 ? 'Supadata ha rechazado la clave (error ' + r.status + '): revisa que esté bien copiada.'
-        : r.status === 429 ? 'Supadata dice que se han acabado las peticiones del plan gratuito (error 429).'
-        : r.status === 404 || r.status === 206 ? 'Supadata no encuentra subtítulos en ese vídeo.'
-        : 'Supadata respondió con el error ' + r.status + '.';
-      return '';
-    }
-    const j = await r.json();
-    const t = typeof j.content === 'string' ? j.content
-      : Array.isArray(j.content) ? j.content.map(s => s.text).join(' ') : '';
-    const out = t.replace(/\s+/g, ' ').trim().slice(0, 30000);
-    if (!out) motivoSupadata = 'Supadata no ha devuelto subtítulos para ese vídeo.';
-    return out;
+    let t = await pedirSupadata(videoId, 'native', clave);
+    if (t) return t;
+    if (motivoSupadata) return '';
+    t = await pedirSupadata(videoId, 'auto', clave);
+    if (!t && !motivoSupadata) motivoSupadata = 'Supadata no ha devuelto subtítulos ni transcripción de audio para ese vídeo.';
+    return t;
   } catch (e) { console.error('Supadata falló:', e.message); motivoSupadata = 'No se pudo contactar con Supadata (' + e.message + ').'; return ''; }
 }
 
