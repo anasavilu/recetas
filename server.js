@@ -526,6 +526,8 @@ async function subtitulosSupadata(videoId) {
     let t = await pedirSupadata(videoId, 'native', clave);
     if (t) return t;
     if (motivoSupadata) return '';
+    // La transcripción del audio gasta muchos más créditos: solo si se activa con SUPADATA_AUDIO=1
+    if (process.env.SUPADATA_AUDIO !== '1') { motivoSupadata = 'Ese vídeo no tiene subtítulos que se puedan leer.'; return ''; }
     t = await pedirSupadata(videoId, 'auto', clave);
     if (!t && !motivoSupadata) motivoSupadata = 'Supadata no ha devuelto subtítulos ni transcripción de audio para ese vídeo.';
     return t;
