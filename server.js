@@ -489,14 +489,18 @@ async function pedirSupadata(videoId, modo, clave) {
   try { j = await r.json(); } catch (e) { /* sin cuerpo */ }
   if (r.status === 202 && j && j.jobId) {
     // transcripción con IA: trabajo asíncrono, se consulta hasta ~80 s
+    let ultimo = 'sin respuesta';
     for (let i = 0; i < 40; i++) {
       await new Promise(ok => setTimeout(ok, 2000));
       r = await fetch(base + '/' + encodeURIComponent(j.jobId), { headers: cab, signal: AbortSignal.timeout(15000) });
       try { j = await r.json(); } catch (e) { j = null; }
-      if (j && j.status === 'completed') break;
-      if (j && j.status === 'failed') { motivoSupadata = 'Supadata no ha podido transcribir el audio de ese vídeo.'; return ''; }
+      ultimo = 'HTTP ' + r.status + ', estado «' + (j && (j.status || j.error || j.message) || 'desconocido') + '»';
+      console.error('Supadata trabajo', ultimo);
+      if (j && (j.status === 'completed' || (j.content && !j.status))) break;
+      if (j && j.status === 'failed') { motivoSupadata = 'Supadata no ha podido transcribir el audio de ese vídeo' + (j.error ? ' (' + (j.error.message || j.error) + ')' : '') + '.'; return ''; }
+      if (!r.ok && r.status !== 404) { motivoSupadata = 'Supadata falló al consultar la transcripción (' + ultimo + ').'; return ''; }
     }
-    if (!j || j.status !== 'completed') { motivoSupadata = 'La transcripción del audio tardó demasiado (el vídeo debe de ser largo).'; return ''; }
+    if (!j || !(j.status === 'completed' || (j.content && !j.status))) { motivoSupadata = 'La transcripción del audio no ha terminado a tiempo (último aviso de Supadata: ' + ultimo + ').'; return ''; }
   } else if (r.status === 404 || (j && /unavailable|not-found/i.test(String(j.error || '')))) {
     return ''; // sin subtítulos: quien llama decide si prueba con la transcripción del audio
   } else if (!r.ok) {
