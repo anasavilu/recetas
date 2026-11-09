@@ -484,15 +484,16 @@ async function pedirSupadata(videoId, modo, clave) {
   const base = 'https://api.supadata.ai/v1/transcript';
   const cab = { 'x-api-key': clave };
   const url = base + '?text=true&mode=' + modo + '&url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + videoId);
-  let r = await fetch(url, { headers: cab, signal: AbortSignal.timeout(25000) });
+  const limite = Date.now() + (modo === 'auto' ? 85000 : 25000); // Render corta las peticiones a ~100 s
+  let r = await fetch(url, { headers: cab, signal: AbortSignal.timeout(limite - Date.now()) });
   let j = null;
   try { j = await r.json(); } catch (e) { /* sin cuerpo */ }
   if (r.status === 202 && j && j.jobId) {
     // transcripción con IA: trabajo asíncrono, se consulta hasta ~80 s
     let ultimo = 'sin respuesta';
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 40 && Date.now() < limite - 3000; i++) {
       await new Promise(ok => setTimeout(ok, 2000));
-      r = await fetch(base + '/' + encodeURIComponent(j.jobId), { headers: cab, signal: AbortSignal.timeout(15000) });
+      r = await fetch(base + '/' + encodeURIComponent(j.jobId), { headers: cab, signal: AbortSignal.timeout(Math.max(3000, Math.min(15000, limite - Date.now()))) });
       try { j = await r.json(); } catch (e) { j = null; }
       ultimo = 'HTTP ' + r.status + ', estado «' + (j && (j.status || j.error || j.message) || 'desconocido') + '»';
       console.error('Supadata trabajo', ultimo);
