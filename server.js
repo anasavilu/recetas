@@ -503,6 +503,7 @@ async function pedirSupadata(videoId, modo, clave) {
     }
     if (!j || !(j.status === 'completed' || (j.content && !j.status))) { motivoSupadata = 'La transcripción del audio no ha terminado a tiempo (último aviso de Supadata: ' + ultimo + ').'; return ''; }
   } else if (r.status === 404 || (j && /unavailable|not-found/i.test(String(j.error || '')))) {
+    if (modo === 'auto') motivoSupadata = 'Supadata contestó HTTP ' + r.status + '. Respuesta: ' + JSON.stringify(j || {}).slice(0, 300);
     return ''; // sin subtítulos: quien llama decide si prueba con la transcripción del audio
   } else if (!r.ok) {
     console.error('Supadata respondió', r.status, JSON.stringify(j || {}).slice(0, 200));
