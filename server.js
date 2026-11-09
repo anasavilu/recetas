@@ -514,7 +514,12 @@ async function pedirSupadata(videoId, modo, clave) {
   }
   const c = j && j.content;
   const t = typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x.text).join(' ') : '';
-  return t.replace(/\s+/g, ' ').trim().slice(0, 30000);
+  const out = t.replace(/\s+/g, ' ').trim().slice(0, 30000);
+  if (!out && modo === 'auto') {
+    // Diagnóstico: se enseña lo que ha contestado Supadata (sin la clave) para poder corregir la lectura
+    motivoSupadata = 'Supadata contestó HTTP ' + r.status + ' sin texto. Respuesta: ' + JSON.stringify(j || {}).slice(0, 300);
+  }
+  return out;
 }
 
 // Servicio externo de transcripciones (Supadata): YouTube bloquea la IP de Render, ellos no.
