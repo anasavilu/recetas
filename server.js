@@ -530,6 +530,8 @@ async function subtitulosSupadata(videoId) {
   const clave = process.env.SUPADATA_API_KEY;
   if (!clave) { motivoSupadata = 'Falta la variable SUPADATA_API_KEY en Render (o no se ha redesplegado todavía).'; return ''; }
   try {
+    // Con el audio activado se pide directamente 'auto' (primero subtítulos, luego audio): cada 206 cuesta 1 crédito, así se evita una llamada de más.
+    if (process.env.SUPADATA_AUDIO === '1') return await pedirSupadata(videoId, 'auto', clave);
     let t = await pedirSupadata(videoId, 'native', clave);
     if (t) return t;
     if (motivoSupadata) return '';
