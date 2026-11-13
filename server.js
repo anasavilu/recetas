@@ -83,9 +83,12 @@ app.get('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
   const visibles = (data || []).filter(r =>
     r.propietario === req.perfil || r.compartida || !r.propietario || (r.compartida_con || []).includes(req.perfil));
   // El enlace público y la lista de perfiles con los que se comparte solo los ve el dueño.
+  // Las notas son personales: cada perfil solo recibe la suya.
   res.json(visibles.map(r => {
-    if (r.propietario === req.perfil) return r;
-    const { token_publico, compartida_con, ...resto } = r;
+    const { notas, ...sinNotas } = r;
+    const base = { ...sinNotas, nota: (notas && notas[req.perfil]) || '' };
+    if (r.propietario === req.perfil) return base;
+    const { token_publico, compartida_con, ...resto } = base;
     return { ...resto, publica: !!token_publico };
   }));
 });
@@ -168,6 +171,22 @@ app.patch('/api/recipes/:id/compartir', requireAuth, requirePerfil, async (req, 
   const { data, error } = await supabase.from('recipes').update(cambios).eq('id', req.params.id).select();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data[0]);
+});
+
+// Nota personal de cada perfil sobre una receta que puede ver (la de otros perfiles no se toca ni se ve).
+app.patch('/api/recipes/:id/nota', requireAuth, requirePerfil, async (req, res) => {
+  const { data: rows, error: e1 } = await supabase.from('recipes').select('*').eq('id', req.params.id);
+  if (e1) return res.status(500).json({ error: e1.message });
+  const r = (rows || [])[0];
+  if (!r) return res.status(404).json({ error: 'Receta no encontrada' });
+  const puede = r.propietario === req.perfil || r.compartida || !r.propietario || (r.compartida_con || []).includes(req.perfil);
+  if (!puede) return res.status(403).json({ error: 'No tienes acceso a esa receta' });
+  const texto = String((req.body || {}).texto || '').trim().slice(0, 2000);
+  const notas = { ...((r.notas && typeof r.notas === 'object') ? r.notas : {}) };
+  if (texto) notas[req.perfil] = texto; else delete notas[req.perfil];
+  const { error } = await supabase.from('recipes').update({ notas }).eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ nota: texto });
 });
 
 app.patch('/api/recipes/:id/publico', requireAuth, requirePerfil, async (req, res) => {

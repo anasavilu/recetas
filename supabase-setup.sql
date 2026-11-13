@@ -42,3 +42,7 @@ create unique index if not exists recipes_token_publico_unico on recipes (token_
 
 -- Compartir una receta con perfiles concretos (además de "con todos"):
 alter table recipes add column if not exists compartida_con text[] not null default '{}';
+
+-- Notas personales por perfil: { "Ana": "texto", "María": "texto" }
+alter table recipes add column if not exists notas jsonb not null default '{}';
+notify pgrst, 'reload schema';

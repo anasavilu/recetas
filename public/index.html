@@ -131,6 +131,10 @@ button{font-family:inherit; cursor:pointer;}
 .detail-cols h4{font-size:0.85rem; color:var(--ink-soft); margin:0 0 8px; font-weight:600;}
 .detail-cols ul, .detail-cols ol{padding-left:18px; margin:0; display:flex; flex-direction:column; gap:6px; font-size:0.92rem;}
 .srclink{font-size:0.8rem; color:var(--ink-soft); margin-top:16px; display:block;}
+.notebox{margin-top:18px; display:flex; flex-direction:column; gap:6px;}
+.notebox h4{margin:0;}
+.notebox textarea{width:100%; min-height:70px; padding:9px 11px; border:1.3px solid var(--line); border-radius:3px; font-family:inherit; font-size:0.9rem; background:var(--paper); color:var(--ink); resize:vertical;}
+.notebox .notestate{font-size:0.75rem; color:var(--ink-soft); min-height:1em;}
 .detailbar{display:flex; justify-content:space-between; align-items:center; margin-top:18px; flex-wrap:wrap; gap:10px;}
 .delbtn{border:1.3px solid var(--danger); color:var(--danger); background:none; padding:7px 12px; border-radius:3px; font-size:0.8rem;}
 .sharecol{display:flex; flex-direction:column; gap:10px; flex:1; min-width:240px;}
@@ -836,6 +840,26 @@ function renderDetailModal(){
     <div><h4>Pasos</h4><ol>${(r.pasos||[]).map(p=>`<li>${escapeHtml(p)}</li>`).join('')}</ol></div>
   `;
   modal.appendChild(cols);
+
+  // Notas personales: solo las ve y las edita este perfil
+  const nb = el('div','notebox');
+  nb.appendChild(el('h4',null,'Mis notas'));
+  const nta = el('textarea'); nta.maxLength = 2000; nta.value = r.nota || '';
+  nta.placeholder = 'Apunta lo que cambiarías, trucos, cuánto tarda de verdad… Solo lo ves tú.';
+  const nst = el('div','notestate');
+  const guardarNota = async ()=>{
+    const texto = nta.value.trim();
+    if(texto === (r.nota||'')) return;
+    nst.textContent = 'Guardando…';
+    try{
+      const out = await api('/api/recipes/'+r.id+'/nota', { method:'PATCH', body: JSON.stringify({ texto }) });
+      r.nota = out.nota; nst.textContent = 'Guardado';
+      setTimeout(()=>{ nst.textContent=''; }, 1500);
+    }catch(e){ nst.textContent = 'No se pudo guardar: ' + e.message; }
+  };
+  nta.onblur = guardarNota;
+  nb.append(nta, nst);
+  modal.appendChild(nb);
 
   if(r.source_url && /^https?:\/\//i.test(r.source_url)){
     const a = el('a','srclink','Ver fuente original ↗'); a.href=r.source_url; a.target='_blank'; a.rel='noopener';
