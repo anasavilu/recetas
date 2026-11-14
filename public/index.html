@@ -496,7 +496,7 @@ function renderGrid(){
   items.forEach(r=>{
     const c = el('div','card');
     c.onclick = async ()=>{ await loadPerfiles(); state.selected=r; state.modal='detail'; render(); };
-    const kindLabel = {foto:'Foto', youtube:'YouTube', audio:'Vídeo', link:'Enlace', manual:'Manual'}[r.origen] || r.origen;
+    const kindLabel = {foto:'Foto', youtube:'YouTube', tiktok:'TikTok', audio:'Vídeo', link:'Enlace', manual:'Manual'}[r.origen] || r.origen;
     let extra = '';
     if(r.propietario === perfil){
       if(r.compartida) extra += ' · <span class="badge">compartida con todos</span>';
@@ -532,7 +532,7 @@ function renderAddModal(){
   if(state.addStep === 'source'){
     modal.appendChild(el('div','hint','¿De dónde viene la receta?'));
     const choice = el('div','sourcechoice');
-    [['foto','📷 Foto'],['youtube','▶ YouTube'],['audio','🎙 Vídeo / audio'],['link','🔗 Enlace / texto'],['manual','✍ Manual']].forEach(([k,label])=>{
+    [['foto','📷 Foto'],['youtube','▶ YouTube'],['tiktok','♪ TikTok'],['audio','🎙 Vídeo / audio'],['link','🔗 Enlace / texto'],['manual','✍ Manual']].forEach(([k,label])=>{
       const b = el('button',null,label);
       b.onclick = ()=>{
         state.addStep = 'form';
@@ -636,7 +636,7 @@ const esVideoSocial = (u)=> /(^|\.)(tiktok|instagram|facebook)\.com|fb\.watch/i.
 
 async function importar(f){
   if(!f.sourceUrl.trim()){ state.aiStatus = 'Pega un enlace primero.'; render(); return; }
-  state.aiStatus = esVideoSocial(f.sourceUrl) ? 'Leyendo el vídeo… (si hay que transcribir el audio puede tardar hasta un minuto y medio, no cierres la pantalla)' : 'Leyendo el enlace… (puede tardar unos segundos)'; render();
+  state.aiStatus = (f.origen === 'tiktok' || esVideoSocial(f.sourceUrl)) ? 'Leyendo el vídeo… (si hay que transcribir el audio puede tardar hasta un minuto y medio, no cierres la pantalla)' : 'Leyendo el enlace… (puede tardar unos segundos)'; render();
   try{
     const p = await api('/api/importar-url', { method:'POST', body: JSON.stringify({ url: f.sourceUrl.trim() }) });
     if(p.solo_video){
@@ -651,8 +651,8 @@ async function importar(f){
     applyParsed(f, p);
     if(p.source_url) f.sourceUrl = p.source_url;
     f.pedirGrabacion = false;
-    state.aiStatus = (f.origen === 'youtube' || esVideoSocial(f.sourceUrl)) ? '✅ OK: he leído la receta del vídeo. Revisa y ajusta antes de guardar.' : 'Listo. Revisa y ajusta antes de guardar.';
-  }catch(e){ f.pedirGrabacion = (f.origen === 'youtube' || esVideoSocial(f.sourceUrl)); state.aiStatus = 'No se pudo leer el enlace: ' + e.message; }
+    state.aiStatus = (f.origen === 'youtube' || f.origen === 'tiktok' || esVideoSocial(f.sourceUrl)) ? '✅ OK: he leído la receta del vídeo. Revisa y ajusta antes de guardar.' : 'Listo. Revisa y ajusta antes de guardar.';
+  }catch(e){ f.pedirGrabacion = (f.origen === 'youtube' || f.origen === 'tiktok' || esVideoSocial(f.sourceUrl)); state.aiStatus = 'No se pudo leer el enlace: ' + e.message; }
   render();
 }
 
@@ -808,6 +808,39 @@ function renderForm(){
     const aiBtn = el('button','aibtn','Estructurar texto con IA');
     aiBtn.onclick = ()=>{
       if(!f.rawText.trim()){ state.aiStatus='Sube un audio o pega texto primero.'; render(); return; }
+      analizar(f, { text: f.rawText }, 'No se pudo procesar: ');
+    };
+    box.appendChild(aiBtn);
+  }
+
+  if(f.origen === 'tiktok'){
+    const field = el('div','field'); field.appendChild(el('label',null,'Enlace del TikTok'));
+    const inp = el('input'); inp.type='url'; inp.placeholder='https://vm.tiktok.com/… o https://www.tiktok.com/@…/video/…'; inp.value=f.sourceUrl;
+    inp.oninput = (e)=>{ f.sourceUrl = e.target.value; };
+    inp.onkeydown = (e)=>{ if(e.key==='Enter'){ e.preventDefault(); importar(f); } };
+    field.appendChild(inp); box.appendChild(field);
+
+    const impBtn = el('button','aibtn','Leer receta desde el enlace');
+    impBtn.onclick = ()=> importar(f);
+    box.appendChild(impBtn);
+    box.appendChild(el('div','hint','Primero lee la descripción del TikTok; si no trae la receta, intenta transcribir el audio. Si tampoco se puede, te pedirá la grabación de pantalla aquí mismo. Puede tardar hasta un minuto y medio.'));
+
+    if(f.pedirGrabacion){
+      const gb = el('div','grabbox');
+      gb.appendChild(el('p',null,'No he podido sacar la receta de este TikTok. Grábalo: pon la grabación de pantalla del móvil mientras suena el vídeo y adjúntala aquí. Solo se usa el audio, y se queda guardado el enlace.'));
+      const gi = el('input'); gi.type='file'; gi.accept='video/*,audio/*';
+      gi.onchange = (e)=>{ const file = e.target.files[0]; if(file) transcribirArchivo(f, file); };
+      gb.appendChild(gi);
+      box.appendChild(gb);
+    }
+
+    const field2 = el('div','field'); field2.appendChild(el('label',null,'Texto de la receta (opcional)'));
+    const ta = el('textarea'); ta.placeholder='Si prefieres, pega aquí la descripción o los ingredientes'; ta.value=f.rawText;
+    ta.oninput = (e)=>{ f.rawText = e.target.value; };
+    field2.appendChild(ta); box.appendChild(field2);
+    const aiBtn = el('button','aibtn','Estructurar texto con IA');
+    aiBtn.onclick = ()=>{
+      if(!f.rawText.trim()){ state.aiStatus='Pega texto primero.'; render(); return; }
       analizar(f, { text: f.rawText }, 'No se pudo procesar: ');
     };
     box.appendChild(aiBtn);
