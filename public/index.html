@@ -147,6 +147,11 @@ button{font-family:inherit; cursor:pointer;}
 .savebtn{margin-left:auto;}
 
 .hint{font-size:0.78rem; color:var(--ink-soft); margin-bottom:12px; line-height:1.4;}
+.fotogrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(110px,1fr)); gap:8px; margin:10px 0;}
+.fotocell{position:relative; aspect-ratio:1; border:1.3px solid var(--ink); border-radius:4px; overflow:hidden; background:var(--paper-card);}
+.fotocell img{width:100%; height:100%; object-fit:cover; display:block;}
+.fotorm{position:absolute; top:4px; right:4px; width:26px; height:26px; border-radius:50%; border:1.3px solid var(--ink); background:var(--paper); color:var(--ink); font-size:1rem; line-height:1; padding:0; cursor:pointer;}
+.fotoportada{position:absolute; left:4px; bottom:4px; background:var(--ink); color:var(--paper); font-size:0.65rem; padding:2px 6px; border-radius:3px;}
 .status{font-size:0.8rem; color:var(--herb); margin:10px 0; min-height:1em;}
 .status.good{font-weight:600; font-size:0.9rem;}
 .grabbox{border:1.5px dashed var(--ink); border-radius:4px; padding:12px; margin:12px 0; background:var(--paper-card);}
@@ -209,6 +214,19 @@ function extractYoutubeId(url){
     }
     return id && /^[\w-]{6,}$/.test(id) ? id : null;
   }catch(e){ return null; }
+}
+// Reduce la foto (máx. 1600 px, JPEG) para que varias fotos quepan en una sola petición. Si el navegador no puede, se usa la original.
+async function prepararFoto(file){
+  try{
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width*k); c.height = Math.round(bmp.height*k);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const url = c.toDataURL('image/jpeg', 0.85);
+    return { b64: url.split(',')[1], mime: 'image/jpeg' };
+  }catch(e){
+    return { b64: await fileToBase64(file), mime: file.type || 'image/jpeg' };
+  }
 }
 function fileToBase64(file){
   return new Promise((resolve,reject)=>{
@@ -680,23 +698,44 @@ function renderForm(){
   const f = state.form;
 
   if(f.origen === 'foto'){
-    const field = el('div','field'); field.appendChild(el('label',null,'Foto de la receta'));
-    const inp = el('input'); inp.type='file'; inp.accept='image/*';
+    f.fotos = f.fotos || [];
+    const field = el('div','field'); field.appendChild(el('label',null,'Fotos de la receta (puedes añadir varias)'));
+    const inp = el('input'); inp.type='file'; inp.accept='image/*'; inp.multiple = true;
     inp.onchange = async (e)=>{
-      const file = e.target.files[0]; if(!file) return;
-      f.imageMime = file.type; f.imageB64 = await fileToBase64(file);
-      state.aiStatus = 'Foto cargada. Pulsa "Leer receta con IA".'; render();
+      const files = Array.from(e.target.files || []);
+      if(!files.length) return;
+      state.aiStatus = 'Preparando fotos…'; render();
+      for(const file of files){
+        if(f.fotos.length >= 6){ state.aiStatus = 'Máximo 6 fotos por receta.'; break; }
+        f.fotos.push(await prepararFoto(file));
+        state.aiStatus = '';
+      }
+      if(f.fotos.length){ f.imageB64 = f.fotos[0].b64; f.imageMime = f.fotos[0].mime; }
+      if(!state.aiStatus) state.aiStatus = f.fotos.length + (f.fotos.length === 1 ? ' foto cargada' : ' fotos cargadas') + '. Pulsa "Leer receta con IA".';
+      render();
     };
     field.appendChild(inp); box.appendChild(field);
-    if(f.imageB64){
-      const img = el('img');
-      img.src = `data:${f.imageMime};base64,${f.imageB64}`;
-      img.style.cssText = 'width:100%;border-radius:4px;margin-bottom:12px;border:1.3px solid var(--ink)';
-      box.appendChild(img);
+    if(f.fotos.length){
+      const grid = el('div','fotogrid');
+      f.fotos.forEach((ft, i)=>{
+        const cell = el('div','fotocell');
+        const img = el('img'); img.src = `data:${ft.mime};base64,${ft.b64}`; img.alt = 'Foto ' + (i+1);
+        const rm = el('button','fotorm','×'); rm.type='button'; rm.setAttribute('aria-label','Quitar foto ' + (i+1));
+        rm.onclick = ()=>{
+          f.fotos.splice(i,1);
+          f.imageB64 = f.fotos[0] ? f.fotos[0].b64 : ''; f.imageMime = f.fotos[0] ? f.fotos[0].mime : '';
+          state.aiStatus = ''; render();
+        };
+        cell.append(img, rm);
+        if(i === 0 && f.fotos.length > 1) cell.appendChild(el('span','fotoportada','Portada'));
+        grid.appendChild(cell);
+      });
+      box.appendChild(grid);
+      if(f.fotos.length > 1) box.appendChild(el('div','hint','La primera foto es la que se guarda como imagen de la receta. Las demás solo se usan para leer el texto.'));
     }
-    const aiBtn = el('button','aibtn','Leer receta con IA');
-    aiBtn.disabled = !f.imageB64;
-    aiBtn.onclick = ()=> analizar(f, { image_base64: f.imageB64, image_mime: f.imageMime }, 'No se pudo leer la foto: ');
+    const aiBtn = el('button','aibtn', f.fotos.length > 1 ? 'Leer receta con IA (' + f.fotos.length + ' fotos)' : 'Leer receta con IA');
+    aiBtn.disabled = !f.fotos.length;
+    aiBtn.onclick = ()=> analizar(f, { images: f.fotos.map(x=>({ base64:x.b64, mime:x.mime })) }, 'No se pudo leer las fotos: ');
     box.appendChild(aiBtn);
   }
 

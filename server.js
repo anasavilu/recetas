@@ -274,11 +274,16 @@ const SYSTEM_CLASIFICAR =
 
 app.post('/api/analyze', requireAuth, requirePerfil, async (req, res) => {
   try {
-    const { image_base64, image_mime, text } = req.body;
+    const { image_base64, image_mime, images, text } = req.body;
+    // Una o varias fotos de la misma receta (por ejemplo, dos páginas de un libro)
+    const fotos = (Array.isArray(images) ? images : (image_base64 ? [{ base64: image_base64, mime: image_mime }] : []))
+      .filter(f => f && typeof f.base64 === 'string' && f.base64).slice(0, 6);
     const content = [];
-    if (image_base64) {
-      content.push({ type: 'image', source: { type: 'base64', media_type: image_mime || 'image/jpeg', data: image_base64 } });
-      content.push({ type: 'text', text: 'Extrae la receta de esta foto (puede ser un plato, una libreta escrita a mano, o una página de un libro de cocina).' });
+    if (fotos.length) {
+      fotos.forEach(f => content.push({ type: 'image', source: { type: 'base64', media_type: f.mime || 'image/jpeg', data: f.base64 } }));
+      content.push({ type: 'text', text: fotos.length > 1
+        ? 'Extrae la receta de estas ' + fotos.length + ' fotos. Son de la MISMA receta (pueden ser páginas distintas, ingredientes en una y pasos en otra): júntalo todo en una sola receta.'
+        : 'Extrae la receta de esta foto (puede ser un plato, una libreta escrita a mano, o una página de un libro de cocina).' });
     } else {
       content.push({ type: 'text', text: 'Extrae la receta de este texto:\n\n' + (text || '') });
     }
