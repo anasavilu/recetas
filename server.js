@@ -290,6 +290,45 @@ app.post('/api/analyze', requireAuth, requirePerfil, async (req, res) => {
   }
 });
 
+// ---------- transcribir audio (grabación de pantalla o audio subido desde el navegador) ----------
+// El navegador extrae el audio y lo manda como WAV (16 kHz, mono). Aquí se pasa a texto con Whisper (OpenAI).
+app.post('/api/transcribir', requireAuth, requirePerfil, express.raw({ type: 'audio/wav', limit: '25mb' }), async (req, res) => {
+  try {
+    const clave = process.env.OPENAI_API_KEY;
+    if (!clave) return res.status(503).json({ error: 'Falta configurar la transcripción de audio (variable OPENAI_API_KEY en Render).' });
+    const audio = req.body;
+    if (!Buffer.isBuffer(audio) || audio.length < 2000 || audio.slice(0, 4).toString() !== 'RIFF') {
+      return res.status(400).json({ error: 'No he recibido un audio válido' });
+    }
+    const form = new FormData();
+    form.append('file', new Blob([audio], { type: 'audio/wav' }), 'audio.wav');
+    form.append('model', 'whisper-1');
+    form.append('response_format', 'text');
+    form.append('prompt', 'Receta de cocina: ingredientes, cantidades y pasos.');
+    let r;
+    try {
+      r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + clave }, body: form, signal: AbortSignal.timeout(90000),
+      });
+    } catch (e) {
+      return res.status(502).json({ error: 'No se pudo contactar con el servicio de transcripción (' + (e.name === 'TimeoutError' ? 'tardó demasiado' : 'sin conexión') + ')' });
+    }
+    const cuerpo = await r.text();
+    if (!r.ok) {
+      console.error('OpenAI transcripción', r.status, cuerpo.slice(0, 300));
+      const msg = r.status === 401 ? 'OpenAI ha rechazado la clave: revisa OPENAI_API_KEY.'
+        : r.status === 429 ? 'OpenAI dice que no hay saldo o se ha superado el límite (error 429). Revisa tu cuenta de OpenAI.'
+        : 'OpenAI respondió con el error ' + r.status + '.';
+      return res.status(502).json({ error: msg });
+    }
+    const texto = cuerpo.trim();
+    if (texto.length < 20) return res.status(422).json({ error: 'No se ha entendido nada en el audio. ¿Se oye la voz en la grabación?' });
+    res.json({ texto: texto.slice(0, 30000) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- leer recetas desde un enlace ----------
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 

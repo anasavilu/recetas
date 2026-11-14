@@ -472,7 +472,7 @@ function renderGrid(){
   items.forEach(r=>{
     const c = el('div','card');
     c.onclick = async ()=>{ await loadPerfiles(); state.selected=r; state.modal='detail'; render(); };
-    const kindLabel = {foto:'Foto', youtube:'YouTube', link:'Enlace', manual:'Manual'}[r.origen] || r.origen;
+    const kindLabel = {foto:'Foto', youtube:'YouTube', audio:'Vídeo', link:'Enlace', manual:'Manual'}[r.origen] || r.origen;
     let extra = '';
     if(r.propietario === perfil){
       if(r.compartida) extra += ' · <span class="badge">compartida con todos</span>';
@@ -508,7 +508,7 @@ function renderAddModal(){
   if(state.addStep === 'source'){
     modal.appendChild(el('div','hint','¿De dónde viene la receta?'));
     const choice = el('div','sourcechoice');
-    [['foto','📷 Foto'],['youtube','▶ YouTube'],['link','🔗 Enlace / texto'],['manual','✍ Manual']].forEach(([k,label])=>{
+    [['foto','📷 Foto'],['youtube','▶ YouTube'],['audio','🎙 Vídeo / audio'],['link','🔗 Enlace / texto'],['manual','✍ Manual']].forEach(([k,label])=>{
       const b = el('button',null,label);
       b.onclick = ()=>{
         state.addStep = 'form';
@@ -554,6 +554,56 @@ async function clasificar(f){
     state.aiStatus = 'Etiquetas y categorías generadas. Revisa antes de guardar.';
   }catch(e){ state.aiStatus = 'No se pudo clasificar: ' + e.message; }
   render();
+}
+
+
+// ---------- audio de una grabación o de un archivo de audio ----------
+// Se hace todo en el navegador: se decodifica el audio, se reduce a mono 16 kHz y se manda como WAV (pocos MB).
+const MAX_AUDIO_SEG = 12 * 60;
+function codificarWav(pcm, hz){
+  const buf = new ArrayBuffer(44 + pcm.length * 2); const v = new DataView(buf);
+  const txt = (o, s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); };
+  txt(0,'RIFF'); v.setUint32(4, 36 + pcm.length*2, true); txt(8,'WAVE'); txt(12,'fmt ');
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,hz,true); v.setUint32(28,hz*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+  txt(36,'data'); v.setUint32(40, pcm.length*2, true);
+  for(let i=0;i<pcm.length;i++){ const x = Math.max(-1, Math.min(1, pcm[i])); v.setInt16(44+i*2, x<0 ? x*0x8000 : x*0x7FFF, true); }
+  return new Blob([buf], { type:'audio/wav' });
+}
+async function extraerAudioWav(file){
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if(!AC || !OAC) throw new Error('Este navegador no puede procesar audio. Prueba con Chrome o Safari actualizados.');
+  const datos = await file.arrayBuffer();
+  const ctx = new AC();
+  let dec;
+  try{
+    dec = await new Promise((ok, ko)=>{ const p = ctx.decodeAudioData(datos, ok, ko); if(p && p.catch) p.catch(ko); });
+  }catch(e){
+    throw new Error('No he podido leer el audio de ese archivo. Prueba con una grabación de pantalla normal (mp4) o un audio (mp3, m4a, wav).');
+  }finally{ try{ ctx.close(); }catch(e){} }
+  if(dec.duration > MAX_AUDIO_SEG) throw new Error('El audio dura ' + Math.round(dec.duration/60) + ' min. El máximo es ' + (MAX_AUDIO_SEG/60) + ' min: recórtalo o graba solo la parte de la receta.');
+  const hz = 16000;
+  const off = new OAC(1, Math.max(1, Math.ceil(dec.duration * hz)), hz);
+  const src = off.createBufferSource(); src.buffer = dec; src.connect(off.destination); src.start();
+  const out = await off.startRendering();
+  return codificarWav(out.getChannelData(0), hz);
+}
+async function transcribirArchivo(f, file){
+  if(file.size > 400*1024*1024){ state.aiStatus = 'No se pudo transcribir: el archivo pesa demasiado (máx. 400 MB).'; render(); return; }
+  state.aiStatus = 'Extrayendo el audio… (con vídeos largos puede tardar un poco)'; render();
+  try{
+    const wav = await extraerAudioWav(file);
+    state.aiStatus = 'Transcribiendo el audio… (hasta un minuto)'; render();
+    const headers = { 'Content-Type':'audio/wav', 'x-app-token': token || '' };
+    if(perfil) headers['x-perfil'] = encodeURIComponent(perfil);
+    const res = await fetch('/api/transcribir', { method:'POST', headers, body: wav });
+    const data = await res.json().catch(()=>({}));
+    if(res.status === 401){ token = null; lsDel('recetario_token'); render(); throw new Error('Sesión caducada, vuelve a introducir el PIN'); }
+    if(!res.ok) throw new Error(data.error || 'Error de servidor');
+    f.rawText = data.texto;
+    await analizar(f, { text: data.texto }, 'Transcrito, pero no se pudo estructurar: ');
+  }catch(e){ state.aiStatus = 'No se pudo transcribir: ' + e.message; render(); }
 }
 
 async function importar(f){
@@ -666,6 +716,30 @@ function renderForm(){
     const aiBtn = el('button','aibtn','Estructurar texto con IA');
     aiBtn.onclick = ()=>{
       if(!f.rawText.trim()){ state.aiStatus='Pega texto primero.'; render(); return; }
+      analizar(f, { text: f.rawText }, 'No se pudo procesar: ');
+    };
+    box.appendChild(aiBtn);
+  }
+
+  if(f.origen === 'audio'){
+    const field = el('div','field'); field.appendChild(el('label',null,'Grabación de pantalla o audio'));
+    const inp = el('input'); inp.type='file'; inp.accept='video/*,audio/*';
+    inp.onchange = (e)=>{ const file = e.target.files[0]; if(file) transcribirArchivo(f, file); };
+    field.appendChild(inp); box.appendChild(field);
+    box.appendChild(el('div','hint','Graba la pantalla mientras suena el vídeo de la receta (YouTube, TikTok, Instagram…) y súbela aquí. El audio se extrae en tu dispositivo: no se sube el vídeo, solo el sonido. Máximo 12 minutos.'));
+
+    const field0 = el('div','field'); field0.appendChild(el('label',null,'Enlace del vídeo (opcional, para guardarlo como fuente)'));
+    const inp0 = el('input'); inp0.type='url'; inp0.placeholder='https://…'; inp0.value=f.sourceUrl;
+    inp0.oninput = (e)=>{ f.sourceUrl = e.target.value; };
+    field0.appendChild(inp0); box.appendChild(field0);
+
+    const field2 = el('div','field'); field2.appendChild(el('label',null,'Transcripción (se rellena sola; puedes corregirla)'));
+    const ta = el('textarea'); ta.value=f.rawText;
+    ta.oninput = (e)=>{ f.rawText = e.target.value; };
+    field2.appendChild(ta); box.appendChild(field2);
+    const aiBtn = el('button','aibtn','Estructurar texto con IA');
+    aiBtn.onclick = ()=>{
+      if(!f.rawText.trim()){ state.aiStatus='Sube un audio o pega texto primero.'; render(); return; }
       analizar(f, { text: f.rawText }, 'No se pudo procesar: ');
     };
     box.appendChild(aiBtn);
