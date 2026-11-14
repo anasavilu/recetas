@@ -636,7 +636,7 @@ const esVideoSocial = (u)=> /(^|\.)(tiktok|instagram|facebook)\.com|fb\.watch/i.
 
 async function importar(f){
   if(!f.sourceUrl.trim()){ state.aiStatus = 'Pega un enlace primero.'; render(); return; }
-  state.aiStatus = 'Leyendo el enlace… (puede tardar unos segundos)'; render();
+  state.aiStatus = esVideoSocial(f.sourceUrl) ? 'Leyendo el vídeo… (si hay que transcribir el audio puede tardar hasta un minuto y medio, no cierres la pantalla)' : 'Leyendo el enlace… (puede tardar unos segundos)'; render();
   try{
     const p = await api('/api/importar-url', { method:'POST', body: JSON.stringify({ url: f.sourceUrl.trim() }) });
     if(p.solo_video){

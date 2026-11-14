@@ -543,10 +543,10 @@ async function subtitulosYoutube(videoId, html) {
 // Servicio externo de transcripciones (Supadata): YouTube bloquea la IP de Render, ellos no.
 // Solo se usa si hay clave SUPADATA_API_KEY; mode=native lee subtítulos ya existentes (no genera con IA).
 let motivoSupadata = '';
-async function pedirSupadata(videoId, modo, clave) {
+async function pedirSupadata(urlVideo, modo, clave) {
   const base = 'https://api.supadata.ai/v1/transcript';
   const cab = { 'x-api-key': clave };
-  const url = base + '?text=true&mode=' + modo + '&url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + videoId);
+  const url = base + '?text=true&mode=' + modo + '&url=' + encodeURIComponent(urlVideo);
   const limite = Date.now() + (modo === 'auto' ? 85000 : 25000); // Render corta las peticiones a ~100 s
   let r = await fetch(url, { headers: cab, signal: AbortSignal.timeout(limite - Date.now()) });
   let j = null;
@@ -592,15 +592,16 @@ async function subtitulosSupadata(videoId) {
   motivoSupadata = '';
   const clave = process.env.SUPADATA_API_KEY;
   if (!clave) { motivoSupadata = 'Falta la variable SUPADATA_API_KEY en Render (o no se ha redesplegado todavía).'; return ''; }
+  const urlYt = 'https://www.youtube.com/watch?v=' + videoId;
   try {
     // Con el audio activado se pide directamente 'auto' (primero subtítulos, luego audio): cada 206 cuesta 1 crédito, así se evita una llamada de más.
-    if (process.env.SUPADATA_AUDIO === '1') return await pedirSupadata(videoId, 'auto', clave);
-    let t = await pedirSupadata(videoId, 'native', clave);
+    if (process.env.SUPADATA_AUDIO === '1') return await pedirSupadata(urlYt, 'auto', clave);
+    let t = await pedirSupadata(urlYt, 'native', clave);
     if (t) return t;
     if (motivoSupadata) return '';
     // La transcripción del audio gasta muchos más créditos: solo si se activa con SUPADATA_AUDIO=1
     if (process.env.SUPADATA_AUDIO !== '1') { motivoSupadata = 'Ese vídeo no tiene subtítulos que se puedan leer.'; return ''; }
-    t = await pedirSupadata(videoId, 'auto', clave);
+    t = await pedirSupadata(urlYt, 'auto', clave);
     if (!t && !motivoSupadata) motivoSupadata = 'Supadata no ha devuelto subtítulos ni transcripción de audio para ese vídeo.';
     return t;
   } catch (e) { console.error('Supadata falló:', e.message); motivoSupadata = 'No se pudo contactar con Supadata (' + e.message + ').'; return ''; }
@@ -614,6 +615,18 @@ async function oembedTiktok(urlVideo) {
     const j = await r.json();
     return { titulo: String(j.title || ''), autor: String(j.author_name || '') };
   } catch (e) { return { titulo: '', autor: '' }; }
+}
+
+// TikTok: casi nunca trae subtítulos y la receta va hablada, así que se pide el audio transcrito (2 créditos por minuto en Supadata).
+async function transcripcionTiktok(urlVideo) {
+  motivoSupadata = '';
+  const clave = process.env.SUPADATA_API_KEY;
+  if (!clave) { motivoSupadata = 'Falta la variable SUPADATA_API_KEY en Render.'; return ''; }
+  try {
+    const t = await pedirSupadata(urlVideo, 'auto', clave);
+    if (!t && !motivoSupadata) motivoSupadata = 'Supadata no ha devuelto transcripción para ese vídeo.';
+    return t;
+  } catch (e) { console.error('Supadata TikTok falló:', e.message); motivoSupadata = 'No se pudo contactar con Supadata (' + e.message + ').'; return ''; }
 }
 
 function esTiktok(u) {
@@ -714,16 +727,20 @@ app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
         if (o.titulo.trim().length > desc.length) { desc = o.titulo.trim(); autor = autor || o.autor; }
       }
       const sirve = desc.length >= 80 && /ingredient|gramos|cucharad|taza|pizca|\d\s?(g|gr|ml|kg|l)\b/i.test(desc);
-      if (!sirve) {
+      let trans = '';
+      if (!sirve && process.env.SUPADATA_API_KEY) trans = await transcripcionTiktok(urlFinal);
+      if (!sirve && !trans) {
         const vista = desc.replace(/\s+/g, ' ').slice(0, 80);
         const titulo = desc.replace(/#\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
         return res.json({
           solo_video: true, titulo, raciones: null, ingredientes: [], etiquetas: [], categorias: [], pasos: [], source_url: urlFinal,
           aviso: (desc ? 'La descripción de este TikTok no trae la receta (dice: «' + vista + '»)' : 'No he podido leer este TikTok' + (errPagina ? ' (' + errPagina + ')' : '')) +
-            '. Seguramente la receta va hablada. He dejado el enlace guardado: ' + (titulo ? '' : 'ponle un título, ') + 'añade los ingredientes y pasos a mano o adjunta la grabación abajo.',
+            (process.env.SUPADATA_API_KEY && motivoSupadata ? ' y no he podido transcribir su audio (' + motivoSupadata + ')' : '') +
+            '. He dejado el enlace guardado: ' + (titulo ? '' : 'ponle un título, ') + 'añade los ingredientes y pasos a mano o adjunta la grabación abajo.',
         });
       }
       texto = 'Descripción del TikTok' + (autor ? ' (de ' + autor + ')' : '') + ':\n' + desc;
+      if (trans) texto += '\n\nTranscripción del audio del vídeo:\n' + trans;
       extra.source_url = urlFinal;
     } else {
       const { html, url: final } = await descargar(url);
