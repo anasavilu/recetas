@@ -622,6 +622,33 @@ function datosTiktok(html) {
   return { descripcion: desc, autor };
 }
 
+// API oficial de YouTube (YouTube Data v3): título y descripción sin depender de que YouTube deje leer la página.
+// Necesita una clave gratuita de Google en YOUTUBE_API_KEY. Cada consulta gasta 1 de las 10.000 unidades diarias gratuitas.
+async function datosYoutubeApi(videoId) {
+  const clave = process.env.YOUTUBE_API_KEY;
+  const vacio = { titulo: '', descripcion: '', leido: false, motivo: '' };
+  if (!clave) return vacio;
+  try {
+    const url = 'https://www.googleapis.com/youtube/v3/videos?part=snippet&id=' + encodeURIComponent(videoId) + '&key=' + encodeURIComponent(clave);
+    const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    let j = null;
+    try { j = await r.json(); } catch (e) { /* sin cuerpo */ }
+    if (!r.ok) {
+      const razon = j && j.error && (j.error.message || j.error.status) || '';
+      console.error('YouTube API', r.status, String(razon).slice(0, 200));
+      return { ...vacio, motivo: r.status === 400 || r.status === 403
+        ? 'La API de YouTube ha rechazado la clave (' + r.status + '): revisa YOUTUBE_API_KEY y que la «YouTube Data API v3» esté activada.'
+        : 'La API de YouTube respondió con el error ' + r.status + '.' };
+    }
+    const sn = j && j.items && j.items[0] && j.items[0].snippet;
+    if (!sn) return { ...vacio, motivo: 'La API de YouTube no encuentra ese vídeo (¿es privado o está borrado?).' };
+    return { titulo: String(sn.title || ''), descripcion: String(sn.description || ''), leido: true, motivo: '' };
+  } catch (e) {
+    console.error('YouTube API falló:', e.message);
+    return { ...vacio, motivo: 'No se pudo contactar con la API de YouTube.' };
+  }
+}
+
 app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
   try {
     const url = String((req.body || {}).url || '').trim();
@@ -633,24 +660,29 @@ app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
     const extra = {};
     const videoId = idYoutube(u);
     if (videoId) {
+      // 1) API oficial (título + descripción); 2) si no hay clave o falla, la página de YouTube (suele estar bloqueada desde Render)
+      let y = await datosYoutubeApi(videoId);
+      const motivoApi = y.motivo;
       let html = '';
-      try { html = (await descargar('https://www.youtube.com/watch?v=' + encodeURIComponent(videoId))).html; } catch (e) { /* se intenta igualmente por la otra vía */ }
-      const y = datosYoutube(html);
+      if (!y.leido) {
+        try { html = (await descargar('https://www.youtube.com/watch?v=' + encodeURIComponent(videoId))).html; } catch (e) { /* se intenta igualmente por la otra vía */ }
+        y = datosYoutube(html);
+      }
       const desc = y.descripcion.trim();
-      const descSirve = desc.length >= 150 && /ingredient/i.test(desc);
+      const descSirve = desc.length >= 150 && /ingredient|cucharad|\d\s?(g|gr|ml|kg)\b/i.test(desc);
 
       let subs = '';
       if (!descSirve) subs = await subtitulosSupadata(videoId) || await subtitulosYoutube(videoId, html);
 
-      if (!descSirve && !subs) {
-        if (!y.leido) {
-          return res.status(422).json({ error: 'YouTube no ha dejado leer ese vídeo desde el servidor (ni la descripción ni los subtítulos).' + (motivoSupadata ? ' ' + motivoSupadata : '') + ' Pega la transcripción o la descripción en el cuadro de abajo.' });
-        }
-        if (desc.length < 150) {
-          const vista = desc.replace(/\s+/g, ' ').slice(0, 80);
-          return res.status(422).json({ error: 'La descripción del vídeo es muy corta' + (vista ? ' (dice: «' + vista + '»)' : ' (está vacía)') + ' y no he podido leer sus subtítulos. Pega la transcripción en el cuadro de abajo.' });
-        }
-        // descripción larga sin receta y sin subtítulos: se intenta con lo que hay
+      if (!descSirve && !subs && desc.length < 150) {
+        // No hay receta escrita que leer: se guarda igualmente el vídeo (se verá incrustado) y la persona añade lo que quiera.
+        const vista = desc.replace(/\s+/g, ' ').slice(0, 80);
+        const porque = !y.leido ? 'No he podido leer los datos de ese vídeo' + (motivoApi ? ' (' + motivoApi + ')' : '')
+          : 'La descripción del vídeo no trae la receta' + (vista ? ' (dice: «' + vista + '»)' : ' (está vacía)');
+        return res.json({
+          solo_video: true, video_id: videoId, titulo: y.titulo || '', raciones: null, ingredientes: [], etiquetas: [], categorias: [], pasos: [],
+          aviso: porque + ' y tampoco hay subtítulos que leer. He dejado el vídeo para que lo veas desde la receta: ' + (y.titulo ? '' : 'ponle un título, ') + 'añade los ingredientes y pasos a mano o pega la transcripción abajo.',
+        });
       }
       texto = 'Título del vídeo: ' + y.titulo + '\n\nDescripción del vídeo:\n' + y.descripcion;
       if (subs) texto += '\n\nSubtítulos del vídeo (transcripción automática de lo que se dice):\n' + subs;

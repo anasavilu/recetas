@@ -611,6 +611,13 @@ async function importar(f){
   state.aiStatus = 'Leyendo el enlace… (puede tardar unos segundos)'; render();
   try{
     const p = await api('/api/importar-url', { method:'POST', body: JSON.stringify({ url: f.sourceUrl.trim() }) });
+    if(p.solo_video){
+      // Sin receta escrita: se guarda el vídeo incrustado y la persona completa lo que quiera
+      if(p.titulo) f.titulo = p.titulo;
+      if(p.video_id) f.videoId = p.video_id;
+      state.aiStatus = p.aviso;
+      render(); return;
+    }
     applyParsed(f, p);
     if(p.source_url) f.sourceUrl = p.source_url;
     state.aiStatus = 'Listo. Revisa y ajusta antes de guardar.';
