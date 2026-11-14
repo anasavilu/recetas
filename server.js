@@ -606,6 +606,16 @@ async function subtitulosSupadata(videoId) {
   } catch (e) { console.error('Supadata falló:', e.message); motivoSupadata = 'No se pudo contactar con Supadata (' + e.message + ').'; return ''; }
 }
 
+// oEmbed de TikTok: endpoint público oficial; devuelve la descripción (título) y el autor del vídeo sin necesitar clave.
+async function oembedTiktok(urlVideo) {
+  try {
+    const r = await fetch('https://www.tiktok.com/oembed?url=' + encodeURIComponent(urlVideo), { signal: AbortSignal.timeout(12000) });
+    if (!r.ok) return { titulo: '', autor: '' };
+    const j = await r.json();
+    return { titulo: String(j.title || ''), autor: String(j.author_name || '') };
+  } catch (e) { return { titulo: '', autor: '' }; }
+}
+
 function esTiktok(u) {
   return /^(?:[\w-]+\.)*tiktok\.com$/i.test(u.hostname);
 }
@@ -693,18 +703,28 @@ app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
       if (subs) texto += '\n\nSubtítulos del vídeo (transcripción automática de lo que se dice):\n' + subs;
       extra.video_id = videoId;
     } else if (esTiktok(u)) {
-      let pagina;
-      try { pagina = await descargar(url); } catch (e) {
-        return res.status(422).json({ error: 'TikTok no ha dejado leer ese vídeo desde el servidor (' + e.message + '). Copia la descripción del vídeo y pégala en el cuadro de abajo.' });
+      // 1) la página del vídeo (descripción); 2) si TikTok no la deja leer o es corta, el oEmbed público
+      let pagina = null, errPagina = '';
+      try { pagina = await descargar(url); } catch (e) { errPagina = e.message; }
+      const t = pagina ? datosTiktok(pagina.html) : { descripcion: '', autor: '' };
+      let desc = t.descripcion.trim(), autor = t.autor;
+      const urlFinal = pagina ? pagina.url.split('?')[0] : url;
+      if (desc.length < 80) {
+        const o = await oembedTiktok(urlFinal);
+        if (o.titulo.trim().length > desc.length) { desc = o.titulo.trim(); autor = autor || o.autor; }
       }
-      const t = datosTiktok(pagina.html);
-      const desc = t.descripcion.trim();
-      if (desc.length < 80 || !/ingredient|gramos|\bg\b|cucharad|\d/i.test(desc)) {
+      const sirve = desc.length >= 80 && /ingredient|gramos|cucharad|taza|pizca|\d\s?(g|gr|ml|kg|l)\b/i.test(desc);
+      if (!sirve) {
         const vista = desc.replace(/\s+/g, ' ').slice(0, 80);
-        return res.status(422).json({ error: 'La descripción de este TikTok no trae la receta' + (vista ? ' (dice: «' + vista + '»)' : ' (no he podido leerla)') + '. Seguramente la receta va hablada en el vídeo: pega aquí los ingredientes y los pasos.' });
+        const titulo = desc.replace(/#\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        return res.json({
+          solo_video: true, titulo, raciones: null, ingredientes: [], etiquetas: [], categorias: [], pasos: [], source_url: urlFinal,
+          aviso: (desc ? 'La descripción de este TikTok no trae la receta (dice: «' + vista + '»)' : 'No he podido leer este TikTok' + (errPagina ? ' (' + errPagina + ')' : '')) +
+            '. Seguramente la receta va hablada. He dejado el enlace guardado: ' + (titulo ? '' : 'ponle un título, ') + 'añade los ingredientes y pasos a mano o adjunta la grabación abajo.',
+        });
       }
-      texto = 'Descripción del TikTok' + (t.autor ? ' (de ' + t.autor + ')' : '') + ':\n' + desc;
-      extra.source_url = pagina.url.split('?')[0];
+      texto = 'Descripción del TikTok' + (autor ? ' (de ' + autor + ')' : '') + ':\n' + desc;
+      extra.source_url = urlFinal;
     } else {
       const { html, url: final } = await descargar(url);
       const rec = recetaJsonLd(html);
