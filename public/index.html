@@ -182,7 +182,7 @@ let perfil = lsGet('recetario_perfil');
 let state = {
   perfiles: [],
   recipes: [],
-  tab: 'mias',            // mias | familia
+  tab: 'todas',           // todas | mias | familia
   activeCats: new Set(),
   activeTags: new Set(),
   showIng: false,
@@ -288,7 +288,7 @@ async function boot(){
 
 async function elegirPerfil(nombre){
   perfil = nombre; lsSet('recetario_perfil', nombre);
-  state.tab = 'mias'; state.activeCats = new Set(); state.activeTags = new Set(); state.query = '';
+  state.tab = 'todas'; state.activeCats = new Set(); state.activeTags = new Set(); state.query = '';
   await loadAll();
 }
 
@@ -317,6 +317,7 @@ async function loadAll(){
 
 // ---------- datos derivados ----------
 function listForTab(){
+  if(state.tab === 'todas') return state.recipes;
   return state.recipes.filter(r => state.tab === 'mias' ? r.propietario === perfil : r.propietario !== perfil);
 }
 function filtered(){
@@ -429,7 +430,7 @@ function renderHeader(){
   const tabs = el('div','tabs');
   const mias = state.recipes.filter(r=>r.propietario===perfil).length;
   const fam = state.recipes.length - mias;
-  [['mias','Mis recetas ('+mias+')'],['familia','Compartidas conmigo ('+fam+')']].forEach(([k,label])=>{
+  [['todas','Todas las recetas ('+state.recipes.length+')'],['mias','Mis recetas ('+mias+')'],['familia','Compartidas conmigo ('+fam+')']].forEach(([k,label])=>{
     const b = el('button','tab'+(state.tab===k?' active':''), label);
     b.onclick = ()=>{ state.tab=k; state.activeCats=new Set(); state.activeTags=new Set(); render(); };
     tabs.appendChild(b);
@@ -482,6 +483,8 @@ function renderGrid(){
     const hayFiltros = state.query || state.activeCats.size || state.activeTags.size;
     if(hayFiltros){
       e.innerHTML = '<h3>Ninguna receta coincide</h3><p>Prueba a quitar algún filtro.</p>';
+    } else if(state.tab==='todas'){
+      e.innerHTML = '<h3>Aún no hay recetas</h3><p>Añade la primera desde una foto, un vídeo de YouTube o un enlace, o espera a que otro perfil comparta una contigo.</p>';
     } else if(state.tab==='mias'){
       e.innerHTML = '<h3>Aún no has guardado ninguna receta</h3><p>Añade la primera desde una foto, un vídeo de YouTube o un enlace.</p>';
     } else {
@@ -912,7 +915,7 @@ function renderForm(){
         image_base64: f.origen==='foto' ? f.imageB64 : '',
         image_mime: f.origen==='foto' ? f.imageMime : '',
       })});
-      state.modal = null; state.tab = 'mias';
+      state.modal = null; state.tab = 'todas';
       await loadAll();
     }catch(e){
       state.aiStatus = 'No se pudo guardar: ' + e.message;
