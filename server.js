@@ -117,7 +117,8 @@ app.get('/r/:token', (req, res) => {
 
 app.post('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
   try {
-    const { titulo, ingredientes, etiquetas, categorias, raciones, pasos, origen, source_url, video_id, compartida, compartida_con, image_base64, image_mime } = req.body;
+    const { titulo, ingredientes, etiquetas, categorias, raciones, pasos, origen, source_url, video_id, compartida, compartida_con, image_base64, image_mime, nota } = req.body;
+    const notaTexto = String(nota || '').trim().slice(0, 2000);
     if (!titulo || !titulo.trim()) return res.status(400).json({ error: 'Falta el título' });
     const con = await limpiarPerfiles(compartida_con, req.perfil);
 
@@ -147,6 +148,8 @@ app.post('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
       compartida: !!compartida,
       // Solo se envía si hay perfiles elegidos: así guardar recetas nunca depende de la columna nueva.
       ...(con.length ? { compartida_con: con } : {}),
+      // Igual: solo se envía si hay nota, para no depender de la columna 'notas'.
+      ...(notaTexto ? { notas: { [req.perfil]: notaTexto } } : {}),
     }]).select();
 
     if (error) return res.status(500).json({ error: error.message });

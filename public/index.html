@@ -702,6 +702,12 @@ function renderCompartir(datos, cambio){
 function renderForm(){
   const box = el('div');
   const f = state.form;
+  // El estado ("Leyendo el enlace…", "✅ OK", errores) se enseña justo debajo del botón de leer, para que se vea.
+  let estadoPuesto = false;
+  const estado = ()=>{
+    estadoPuesto = true;
+    return el('div','status' + (state.aiStatus.startsWith('No se pudo') ? ' err' : state.aiStatus.startsWith('✅') ? ' good' : ''), state.aiStatus);
+  };
 
   if(f.origen === 'foto'){
     f.fotos = f.fotos || [];
@@ -766,6 +772,7 @@ function renderForm(){
     impBtn.onclick = ()=> importar(f);
     box.appendChild(impBtn);
     box.appendChild(el('div','hint','Lee la descripción del vídeo y, si no trae la receta, intenta leer sus subtítulos. Si no la encuentra, te pedirá la grabación aquí mismo.'));
+    box.appendChild(estado());
 
     if(f.pedirGrabacion){
       const gb = el('div','grabbox');
@@ -795,6 +802,7 @@ function renderForm(){
     inp.onchange = (e)=>{ const file = e.target.files[0]; if(file) transcribirArchivo(f, file); };
     field.appendChild(inp); box.appendChild(field);
     box.appendChild(el('div','hint','Graba la pantalla mientras suena el vídeo de la receta (YouTube, TikTok, Instagram…) y súbela aquí. El audio se extrae en tu dispositivo: no se sube el vídeo, solo el sonido. Máximo 12 minutos.'));
+    box.appendChild(estado());
 
     const field0 = el('div','field'); field0.appendChild(el('label',null,'Enlace del vídeo (opcional, para guardarlo como fuente)'));
     const inp0 = el('input'); inp0.type='url'; inp0.placeholder='https://…'; inp0.value=f.sourceUrl;
@@ -824,6 +832,7 @@ function renderForm(){
     impBtn.onclick = ()=> importar(f);
     box.appendChild(impBtn);
     box.appendChild(el('div','hint','Primero lee la descripción del TikTok; si no trae la receta, intenta transcribir el audio. Si tampoco se puede, te pedirá la grabación de pantalla aquí mismo. Puede tardar hasta un minuto y medio.'));
+    box.appendChild(estado());
 
     if(f.pedirGrabacion){
       const gb = el('div','grabbox');
@@ -857,6 +866,7 @@ function renderForm(){
     impBtn.onclick = ()=> importar(f);
     box.appendChild(impBtn);
     box.appendChild(el('div','hint','Si la web no se deja leer (algunas bloquean lecturas automáticas), pega el texto de la receta aquí abajo. Para TikTok o Instagram, pega el enlace del vídeo: si la descripción no trae la receta, podrás adjuntar la grabación.'));
+    box.appendChild(estado());
 
     if(f.pedirGrabacion){
       const gb = el('div','grabbox');
@@ -880,8 +890,7 @@ function renderForm(){
     box.appendChild(aiBtn);
   }
 
-  const statusEl = el('div','status' + (state.aiStatus.startsWith('No se pudo') ? ' err' : state.aiStatus.startsWith('✅') ? ' good' : ''), state.aiStatus);
-  box.appendChild(statusEl);
+  if(!estadoPuesto) box.appendChild(estado());
 
   const tField = el('div','field'); tField.appendChild(el('label',null,'Título'));
   const tInp = el('input'); tInp.type='text'; tInp.value=f.titulo; tInp.placeholder='Nombre de la receta';
@@ -920,6 +929,12 @@ function renderForm(){
   box.appendChild(renderEditableList('Etiquetas de ingredientes', f.etiquetas, 'etiqueta', normTag));
   box.appendChild(renderEditableList('Pasos', f.pasos, 'paso', s=>s));
 
+  const nField = el('div','field'); nField.appendChild(el('label',null,'Mis notas (opcional, solo las ves tú)'));
+  const nTa = el('textarea'); nTa.maxLength = 2000; nTa.value = f.nota || '';
+  nTa.placeholder = 'Trucos, cambios que harías, cuánto tarda de verdad…';
+  nTa.oninput = (e)=>{ f.nota = e.target.value; };
+  nField.appendChild(nTa); box.appendChild(nField);
+
   const shareField = el('div','field'); shareField.appendChild(el('label',null,'Compartir con (por defecto, solo tú la ves)'));
   shareField.appendChild(renderCompartir({
     get compartida(){ return f.compartida; }, set compartida(v){ f.compartida = v; }, con: f.compartidaCon,
@@ -947,6 +962,7 @@ function renderForm(){
         compartida_con: f.compartida ? [] : f.compartidaCon,
         image_base64: f.origen==='foto' ? f.imageB64 : '',
         image_mime: f.origen==='foto' ? f.imageMime : '',
+        nota: (f.nota || '').trim(),
       })});
       state.modal = null; state.tab = 'todas';
       await loadAll();
@@ -1025,6 +1041,11 @@ function renderDetailModal(){
   `;
   modal.appendChild(cols);
 
+  if(r.source_url && /^https?:\/\//i.test(r.source_url)){
+    const a = el('a','srclink','Ver fuente original ↗'); a.href=r.source_url; a.target='_blank'; a.rel='noopener';
+    modal.appendChild(a);
+  }
+
   // Notas personales: solo las ve y las edita este perfil
   const nb = el('div','notebox');
   nb.appendChild(el('h4',null,'Mis notas'));
@@ -1044,11 +1065,6 @@ function renderDetailModal(){
   nta.onblur = guardarNota;
   nb.append(nta, nst);
   modal.appendChild(nb);
-
-  if(r.source_url && /^https?:\/\//i.test(r.source_url)){
-    const a = el('a','srclink','Ver fuente original ↗'); a.href=r.source_url; a.target='_blank'; a.rel='noopener';
-    modal.appendChild(a);
-  }
 
   if(esMia || !r.propietario){
     const bar = el('div','detailbar');
