@@ -162,6 +162,12 @@ button{font-family:inherit; cursor:pointer;}
 .fotoportada{position:absolute; left:4px; bottom:4px; background:var(--ink); color:var(--paper); font-size:0.65rem; padding:2px 6px; border-radius:3px;}
 .status{font-size:0.8rem; color:var(--herb); margin:10px 0; min-height:1em;}
 .status.good{font-weight:600; font-size:0.9rem;}
+.status.working{display:flex; align-items:center; gap:10px; background:#FFE9A8; color:#6B4300; border:1.5px solid #D9980B; border-radius:4px; padding:10px 12px; font-weight:600; font-size:0.88rem; line-height:1.35; animation:pulso 1.6s ease-in-out infinite;}
+.status.working::before{content:''; flex:none; width:16px; height:16px; border:3px solid #D9980B; border-top-color:transparent; border-radius:50%; animation:gira 0.8s linear infinite;}
+@keyframes gira{to{transform:rotate(360deg);}}
+@keyframes pulso{50%{background:#FFD978;}}
+@media (prefers-reduced-motion:reduce){.status.working,.status.working::before{animation:none;}}
+.pegarbtn{width:100%; margin-bottom:12px; background:var(--herb-tint); color:var(--herb); border:1.5px solid var(--herb); padding:11px 14px; font-size:0.95rem; font-weight:600; border-radius:3px;}
 .grabbox{border:1.5px dashed var(--ink); border-radius:4px; padding:12px; margin:12px 0; background:var(--paper-card);}
 .grabbox p{margin:0 0 8px; font-size:0.85rem; line-height:1.4;}
 .err{color:var(--danger);}
@@ -539,7 +545,18 @@ function renderAddModal(){
   modal.appendChild(el('h2',null,'Nueva receta'));
 
   if(state.addStep === 'source'){
-    modal.appendChild(el('div','hint','¿De dónde viene la receta?'));
+    const pegar = el('button','pegarbtn','📋 Pegar enlace copiado');
+    pegar.onclick = async ()=>{
+      let t = '';
+      try{ t = (await navigator.clipboard.readText()) || ''; }
+      catch(e){ state.aiStatus = 'No se pudo leer el portapapeles. Elige de dónde viene la receta y pega el enlace en el campo.'; render(); return; }
+      if(!t.trim()){ state.aiStatus = 'No se pudo: no hay nada copiado.'; render(); return; }
+      pendingShare = { url:'', text:t, title:'' };
+      abrirCompartido();
+    };
+    modal.appendChild(pegar);
+    if(state.aiStatus) modal.appendChild(el('div','status' + claseEstado(state.aiStatus), state.aiStatus));
+    modal.appendChild(el('div','hint','…o elige de dónde viene la receta:'));
     const choice = el('div','sourcechoice');
     [['foto','📷 Foto'],['youtube','▶ YouTube'],['tiktok','♪ TikTok'],['audio','🎙 Vídeo / audio'],['link','🔗 Enlace / texto'],['manual','✍ Manual']].forEach(([k,label])=>{
       const b = el('button',null,label);
@@ -643,6 +660,14 @@ async function transcribirArchivo(f, file){
 
 const esVideoSocial = (u)=>{ try{ return /(^|\.)((tiktok|instagram|facebook)\.com|fb\.watch)$/.test(new URL(String(u||'').trim()).hostname.toLowerCase()); }catch(e){ return false; } };
 
+// Mientras se trabaja (los mensajes con «…») el aviso va en naranja y con un indicador giratorio.
+function claseEstado(t){
+  if(t.startsWith('No se pudo')) return ' err';
+  if(t.startsWith('✅')) return ' good';
+  if(t.includes('…')) return ' working';
+  return '';
+}
+
 async function importar(f){
   if(!f.sourceUrl.trim()){ state.aiStatus = 'Pega un enlace primero.'; render(); return; }
   state.aiStatus = (f.origen === 'tiktok' || esVideoSocial(f.sourceUrl)) ? 'Leyendo el vídeo… (si hay que transcribir el audio puede tardar hasta un minuto y medio, no cierres la pantalla)' : 'Leyendo el enlace… (puede tardar unos segundos)'; render();
@@ -715,7 +740,7 @@ function renderForm(){
   let estadoPuesto = false;
   const estado = ()=>{
     estadoPuesto = true;
-    return el('div','status' + (state.aiStatus.startsWith('No se pudo') ? ' err' : state.aiStatus.startsWith('✅') ? ' good' : ''), state.aiStatus);
+    return el('div','status' + claseEstado(state.aiStatus), state.aiStatus);
   };
 
   if(f.origen === 'foto'){
