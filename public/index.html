@@ -2,7 +2,15 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#4E6E4E">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Recetario">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Recetario</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Space+Grotesk:wght@400;500;600&display=swap');
@@ -313,6 +321,7 @@ async function loadAll(){
   catch(e){ state.recipes = []; }
   state.loading = false;
   render();
+  if(pendingShare) abrirCompartido();
 }
 
 // ---------- datos derivados ----------
@@ -632,7 +641,7 @@ async function transcribirArchivo(f, file){
   }catch(e){ state.aiStatus = 'No se pudo transcribir: ' + e.message; render(); }
 }
 
-const esVideoSocial = (u)=> /(^|\.)(tiktok|instagram|facebook)\.com|fb\.watch/i.test(String(u||'')) ;
+const esVideoSocial = (u)=>{ try{ return /(^|\.)((tiktok|instagram|facebook)\.com|fb\.watch)$/.test(new URL(String(u||'').trim()).hostname.toLowerCase()); }catch(e){ return false; } };
 
 async function importar(f){
   if(!f.sourceUrl.trim()){ state.aiStatus = 'Pega un enlace primero.'; render(); return; }
@@ -1125,6 +1134,33 @@ function renderDetailModal(){
     modal.appendChild(bar);
   }
   return overlay;
+}
+
+// ---------- recibir enlaces desde "Compartir" del móvil (Android, app instalada) ----------
+let pendingShare = null;
+try{
+  const q = new URLSearchParams(location.search);
+  if(q.get('url') || q.get('text') || q.get('title')){
+    pendingShare = { url: q.get('url') || '', text: q.get('text') || '', title: q.get('title') || '' };
+    history.replaceState(null, '', location.pathname);
+  }
+}catch(e){ /* sin soporte */ }
+
+function abrirCompartido(){
+  const s = pendingShare; pendingShare = null;
+  if(!s) return;
+  const m = (s.url + ' ' + s.text + ' ' + s.title).match(/https?:\/\/[^\s]+/);
+  const enlace = m ? m[0] : '';
+  let host = ''; try{ host = new URL(enlace).hostname.toLowerCase(); }catch(e){ /* sin enlace */ }
+  const origen = /(^|\.)(youtube\.com|youtu\.be)$/.test(host) ? 'youtube' : /(^|\.)tiktok\.com$/.test(host) ? 'tiktok' : 'link';
+  const f = { titulo:'', raciones:'', ingredientes:[], etiquetas:[], categorias:[], pasos:[], origen, sourceUrl: enlace, imageB64:'', imageMime:'', videoId:'', rawText: enlace ? '' : (s.text || s.title || ''), compartida:false, compartidaCon:[] };
+  state.form = f; state.modal = 'add'; state.addStep = 'form'; state.aiStatus = '';
+  render();
+  if(enlace) importar(f);
+}
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{ navigator.serviceWorker.register('/sw.js').catch(()=>{}); });
 }
 
 boot();
