@@ -632,6 +632,32 @@ async function transcripcionTiktok(urlVideo) {
   } catch (e) { console.error('Supadata TikTok falló:', e.message); motivoSupadata = 'No se pudo contactar con Supadata (' + e.message + ').'; return ''; }
 }
 
+// Supadata /metadata: texto y autor de una publicación de TikTok o Instagram (1 crédito). En Instagram la receta suele ir en el texto.
+async function metadataSupadata(urlVideo) {
+  const clave = process.env.SUPADATA_API_KEY;
+  const vacio = { descripcion: '', autor: '' };
+  if (!clave) return vacio;
+  try {
+    const r = await fetch('https://api.supadata.ai/v1/metadata?url=' + encodeURIComponent(urlVideo), { headers: { 'x-api-key': clave }, signal: AbortSignal.timeout(20000) });
+    if (!r.ok) { console.error('Supadata metadata respondió', r.status); return vacio; }
+    const j = await r.json();
+    const texto = String(j.description || j.title || '');
+    const a = j.author || {};
+    return { descripcion: texto, autor: String(a.displayName || a.username || '') };
+  } catch (e) { console.error('Supadata metadata falló:', e.message); return vacio; }
+}
+
+// En Instagram, og:description viene como «123 Me gusta, 4 comentarios - usuario el 3 de mayo: "texto"».
+function limpiarDescInstagram(d) {
+  const m = /(me gusta|likes?)/i.test(d) && d.match(/:\s*["“]([\s\S]+?)["”]\.?\s*$/);
+  return m ? m[1] : d;
+}
+
+function esRedVideo(u) {
+  return /^(?:[\w-]+\.)*(?:tiktok|instagram)\.com$/i.test(u.hostname);
+}
+function nombreRed(u) { return /instagram\.com$/i.test(u.hostname) ? 'Instagram' : 'TikTok'; }
+
 function esTiktok(u) {
   return /^(?:[\w-]+\.)*tiktok\.com$/i.test(u.hostname);
 }
@@ -718,18 +744,25 @@ app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
       texto = 'Título del vídeo: ' + y.titulo + '\n\nDescripción del vídeo:\n' + y.descripcion;
       if (subs) texto += '\n\nSubtítulos del vídeo (transcripción automática de lo que se dice):\n' + subs;
       extra.video_id = videoId;
-    } else if (esTiktok(u)) {
-      // 1) la página del vídeo (descripción); 2) si TikTok no la deja leer o es corta, el oEmbed público
+    } else if (esRedVideo(u)) {
+      // TikTok / Instagram. 1) la página (gratis); 2) oEmbed de TikTok (gratis); 3) metadatos de Supadata (1 crédito);
+      // 4) transcripción del audio (2 créditos/min); 5) si nada sirve, se pide la grabación.
+      const red = nombreRed(u);
       let pagina = null, errPagina = '';
       try { pagina = await descargar(url); } catch (e) { errPagina = e.message; }
       const t = pagina ? datosTiktok(pagina.html) : { descripcion: '', autor: '' };
-      let desc = t.descripcion.trim(), autor = t.autor;
+      let desc = (red === 'Instagram' ? limpiarDescInstagram(t.descripcion) : t.descripcion).trim(), autor = t.autor;
       const urlFinal = pagina ? pagina.url.split('?')[0] : url;
-      if (desc.length < 80) {
+      const sirveTexto = d => d.length >= 80 && /ingredient|gramos|cucharad|taza|pizca|\d\s?(g|gr|ml|kg|l)\b/i.test(d);
+      if (!sirveTexto(desc) && red === 'TikTok') {
         const o = await oembedTiktok(urlFinal);
         if (o.titulo.trim().length > desc.length) { desc = o.titulo.trim(); autor = autor || o.autor; }
       }
-      const sirve = desc.length >= 80 && /ingredient|gramos|cucharad|taza|pizca|\d\s?(g|gr|ml|kg|l)\b/i.test(desc);
+      if (!sirveTexto(desc) && process.env.SUPADATA_API_KEY) {
+        const m = await metadataSupadata(urlFinal);
+        if (m.descripcion.trim().length > desc.length) { desc = m.descripcion.trim(); autor = autor || m.autor; }
+      }
+      const sirve = sirveTexto(desc);
       let trans = '';
       if (!sirve && process.env.SUPADATA_API_KEY) trans = await transcripcionTiktok(urlFinal);
       if (!sirve && !trans) {
@@ -737,12 +770,12 @@ app.post('/api/importar-url', requireAuth, requirePerfil, async (req, res) => {
         const titulo = desc.replace(/#\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
         return res.json({
           solo_video: true, titulo, raciones: null, ingredientes: [], etiquetas: [], categorias: [], pasos: [], source_url: urlFinal,
-          aviso: (desc ? 'La descripción de este TikTok no trae la receta (dice: «' + vista + '»)' : 'No he podido leer este TikTok' + (errPagina ? ' (' + errPagina + ')' : '')) +
+          aviso: (desc ? 'La descripción de este ' + red + ' no trae la receta (dice: «' + vista + '»)' : 'No he podido leer este ' + red + (errPagina ? ' (' + errPagina + ')' : '')) +
             (process.env.SUPADATA_API_KEY && motivoSupadata ? ' y no he podido transcribir su audio (' + motivoSupadata + ')' : '') +
             '. He dejado el enlace guardado: ' + (titulo ? '' : 'ponle un título, ') + 'añade los ingredientes y pasos a mano o adjunta la grabación abajo.',
         });
       }
-      texto = 'Descripción del TikTok' + (autor ? ' (de ' + autor + ')' : '') + ':\n' + desc;
+      texto = 'Descripción del ' + red + (autor ? ' (de ' + autor + ')' : '') + ':\n' + desc;
       if (trans) texto += '\n\nTranscripción del audio del vídeo:\n' + trans;
       extra.source_url = urlFinal;
     } else {

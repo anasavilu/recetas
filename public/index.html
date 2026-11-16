@@ -511,7 +511,7 @@ function renderGrid(){
   items.forEach(r=>{
     const c = el('div','card');
     c.onclick = async ()=>{ await loadPerfiles(); state.selected=r; state.modal='detail'; render(); };
-    const kindLabel = {foto:'Foto', youtube:'YouTube', tiktok:'TikTok', audio:'Vídeo', link:'Enlace', manual:'Manual'}[r.origen] || r.origen;
+    const kindLabel = (r.origen === 'tiktok' && /instagram\.com/i.test(r.source_url||'')) ? 'Instagram' : ({foto:'Foto', youtube:'YouTube', tiktok:'TikTok', audio:'Vídeo', link:'Enlace', manual:'Manual'}[r.origen] || r.origen);
     let extra = '';
     if(r.propietario === perfil){
       if(r.compartida) extra += ' · <span class="badge">compartida con todos</span>';
@@ -558,7 +558,7 @@ function renderAddModal(){
     if(state.aiStatus) modal.appendChild(el('div','status' + claseEstado(state.aiStatus), state.aiStatus));
     modal.appendChild(el('div','hint','…o elige de dónde viene la receta:'));
     const choice = el('div','sourcechoice');
-    [['foto','📷 Foto'],['youtube','▶ YouTube'],['tiktok','♪ TikTok'],['audio','🎙 Vídeo / audio'],['link','🔗 Enlace / texto'],['manual','✍ Manual']].forEach(([k,label])=>{
+    [['foto','📷 Foto'],['youtube','▶ YouTube'],['tiktok','♪ TikTok / Instagram'],['audio','🎙 Vídeo / audio'],['link','🔗 Enlace / texto'],['manual','✍ Manual']].forEach(([k,label])=>{
       const b = el('button',null,label);
       b.onclick = ()=>{
         state.addStep = 'form';
@@ -856,8 +856,8 @@ function renderForm(){
   }
 
   if(f.origen === 'tiktok'){
-    const field = el('div','field'); field.appendChild(el('label',null,'Enlace del TikTok'));
-    const inp = el('input'); inp.type='url'; inp.placeholder='https://vm.tiktok.com/… o https://www.tiktok.com/@…/video/…'; inp.value=f.sourceUrl;
+    const field = el('div','field'); field.appendChild(el('label',null,'Enlace del TikTok o de Instagram'));
+    const inp = el('input'); inp.type='url'; inp.placeholder='https://vm.tiktok.com/… o https://www.instagram.com/reel/…'; inp.value=f.sourceUrl;
     inp.oninput = (e)=>{ f.sourceUrl = e.target.value; };
     inp.onkeydown = (e)=>{ if(e.key==='Enter'){ e.preventDefault(); importar(f); } };
     field.appendChild(inp); box.appendChild(field);
@@ -865,12 +865,12 @@ function renderForm(){
     const impBtn = el('button','aibtn','Leer receta desde el enlace');
     impBtn.onclick = ()=> importar(f);
     box.appendChild(impBtn);
-    box.appendChild(el('div','hint','Primero lee la descripción del TikTok; si no trae la receta, intenta transcribir el audio. Si tampoco se puede, te pedirá la grabación de pantalla aquí mismo. Puede tardar hasta un minuto y medio.'));
+    box.appendChild(el('div','hint','Primero lee el texto de la publicación (en Instagram la receta suele ir ahí); si no la trae, intenta transcribir el audio. Si tampoco se puede, te pedirá la grabación de pantalla aquí mismo. Puede tardar hasta un minuto y medio.'));
     box.appendChild(estado());
 
     if(f.pedirGrabacion){
       const gb = el('div','grabbox');
-      gb.appendChild(el('p',null,'No he podido sacar la receta de este TikTok. Grábalo: pon la grabación de pantalla del móvil mientras suena el vídeo y adjúntala aquí. Solo se usa el audio, y se queda guardado el enlace.'));
+      gb.appendChild(el('p',null,'No he podido sacar la receta de este vídeo. Grábalo: pon la grabación de pantalla del móvil mientras suena el vídeo y adjúntala aquí. Solo se usa el audio, y se queda guardado el enlace.'));
       const gi = el('input'); gi.type='file'; gi.accept='video/*,audio/*';
       gi.onchange = (e)=>{ const file = e.target.files[0]; if(file) transcribirArchivo(f, file); };
       gb.appendChild(gi);
@@ -1177,7 +1177,7 @@ function abrirCompartido(){
   const m = (s.url + ' ' + s.text + ' ' + s.title).match(/https?:\/\/[^\s]+/);
   const enlace = m ? m[0] : '';
   let host = ''; try{ host = new URL(enlace).hostname.toLowerCase(); }catch(e){ /* sin enlace */ }
-  const origen = /(^|\.)(youtube\.com|youtu\.be)$/.test(host) ? 'youtube' : /(^|\.)tiktok\.com$/.test(host) ? 'tiktok' : 'link';
+  const origen = /(^|\.)(youtube\.com|youtu\.be)$/.test(host) ? 'youtube' : /(^|\.)(tiktok|instagram)\.com$/.test(host) ? 'tiktok' : 'link';
   const f = { titulo:'', raciones:'', ingredientes:[], etiquetas:[], categorias:[], pasos:[], origen, sourceUrl: enlace, imageB64:'', imageMime:'', videoId:'', rawText: enlace ? '' : (s.text || s.title || ''), compartida:false, compartidaCon:[] };
   state.form = f; state.modal = 'add'; state.addStep = 'form'; state.aiStatus = '';
   render();
