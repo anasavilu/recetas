@@ -1037,6 +1037,44 @@ function renderEditableList(label, arr, placeholder, normalizer){
 }
 
 // ---------- detalle ----------
+// Cerrar la receta con un gesto: arrastrar hacia abajo (desde arriba del todo) o hacia la derecha
+function gestoCerrar(overlay, modal){
+  let x0=0, y0=0, dx=0, dy=0, modo=null, activo=false;
+  const cerrar = ()=>{ state.modal=null; render(); };
+  overlay.addEventListener('touchstart', e=>{
+    if(e.touches.length!==1) return;
+    const t=e.touches[0]; x0=t.clientX; y0=t.clientY; dx=dy=0; modo=null;
+    activo = !e.target.closest('textarea, input, select');
+    modal.style.transition='none';
+  }, {passive:true});
+  overlay.addEventListener('touchmove', e=>{
+    if(!activo) return;
+    const t=e.touches[0]; dx=t.clientX-x0; dy=t.clientY-y0;
+    if(!modo){
+      if(Math.abs(dx)<10 && Math.abs(dy)<10) return;
+      if(dy>0 && Math.abs(dy)>Math.abs(dx) && overlay.scrollTop<=0) modo='abajo';
+      else if(dx>0 && Math.abs(dx)>Math.abs(dy)*1.5) modo='derecha';
+      else { activo=false; return; }
+    }
+    modal.style.transform = modo==='abajo' ? 'translateY('+Math.max(0,dy)+'px)' : 'translateX('+Math.max(0,dx)+'px)';
+    modal.style.opacity = String(Math.max(0.4, 1 - (modo==='abajo'?dy:dx)/400));
+  }, {passive:true});
+  overlay.addEventListener('touchend', ()=>{
+    if(!modo){ return; }
+    const d = modo==='abajo' ? dy : dx;
+    if(d > 110){
+      modal.style.transition='transform .18s ease, opacity .18s ease';
+      modal.style.transform = modo==='abajo' ? 'translateY(110vh)' : 'translateX(110vw)'; modal.style.opacity='0';
+      setTimeout(cerrar, 160);
+    } else {
+      modal.style.transition='transform .18s ease, opacity .18s ease';
+      modal.style.transform=''; modal.style.opacity='';
+    }
+    modo=null; activo=false;
+  });
+}
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && state.modal){ state.modal=null; render(); } });
+
 function renderDetailModal(){
   const r = state.selected;
   const esMia = r.propietario === perfil;
@@ -1047,6 +1085,7 @@ function renderDetailModal(){
   const close = el('button','closebtn'); close.innerHTML='&times;'; close.setAttribute('aria-label','Cerrar');
   close.onclick = ()=>{ state.modal=null; render(); };
   modal.appendChild(close);
+  gestoCerrar(overlay, modal);
   modal.appendChild(el('h2',null,r.titulo));
   if(!esMia && r.propietario){
     const p = el('div','hint'); p.textContent = 'Compartida por ' + r.propietario; modal.appendChild(p);

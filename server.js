@@ -115,6 +115,7 @@ app.get('/r/:token', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'r.html'));
 });
 
+const guardando = new Set();
 app.post('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
   try {
     const { titulo, ingredientes, etiquetas, categorias, raciones, pasos, origen, source_url, video_id, compartida, compartida_con, image_base64, image_mime, nota } = req.body;
@@ -122,6 +123,18 @@ app.post('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
     if (!titulo || !titulo.trim()) return res.status(400).json({ error: 'Falta el título' });
     const con = await limpiarPerfiles(compartida_con, req.perfil);
 
+    // Evitar duplicados: un doble toque o un reintento (p. ej. con el servidor dormido) no crea la receta dos veces.
+    const clave = [req.perfil, titulo.trim().toLowerCase(), source_url || ''].join('|');
+    if (guardando.has(clave)) return res.status(409).json({ error: 'Ya se está guardando esta receta' });
+    guardando.add(clave);
+    try {
+      const desde = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const { data: rec } = await supabase.from('recipes').select('*').eq('propietario', req.perfil).eq('titulo', titulo.trim()).gte('creado', desde).limit(1);
+      if (rec && rec[0]) return res.json(rec[0]);
+      return await crearReceta();
+    } finally { guardando.delete(clave); }
+
+    async function crearReceta() {
     let image_url = null;
     if (image_base64) {
       const buf = Buffer.from(image_base64, 'base64');
@@ -153,7 +166,8 @@ app.post('/api/recipes', requireAuth, requirePerfil, async (req, res) => {
     }]).select();
 
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data[0]);
+    return res.json(data[0]);
+    }
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
